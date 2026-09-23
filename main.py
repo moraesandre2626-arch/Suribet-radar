@@ -551,3 +551,33 @@ def atualizar_creditos(response):
 
     usado = response.headers.get(
         "x-requests-used"
+    )
+
+    ultimo = response.headers.get(
+        "x-requests-last"
+    )
+
+    try:
+        if restante is not None:
+            CREDITOS_RESTANTES = int(restante)
+    except Exception:
+        pass
+
+    try:
+        if usado is not None:
+            CREDITOS_USADOS = int(usado)
+    except Exception:
+        pass
+
+    try:
+        if ultimo is not None:
+            CUSTO_ULTIMA_CHAMADA = int(ultimo)
+    except Exception:
+        pass
+
+    print(
+        "💳 CRÉDITOS | "
+        f"restantes={CREDITOS_RESTANTES} | "
+        f"usados={CREDITOS_USADOS} | "
+        f"última={CUSTO_ULTIMA_CHAMADA}"
+    )
