@@ -358,3 +358,82 @@ def calcular_surebet(best):
         "retorno": retorno,
         "lucro": lucro,
         "lucro_percentual":
+    stakes = {}
+
+    for resultado, odd in best.items():
+
+        stake = (
+            (BANCA / odd)
+            / inversa
+        )
+
+        stakes[resultado] = stake
+
+    return {
+        "inversa": inversa,
+        "retorno": retorno,
+        "lucro": lucro,
+        "lucro_percentual": lucro_percentual,
+        "stakes": stakes
+    }
+
+
+# ============================================================
+# MENSAGEM
+# ============================================================
+
+def montar_mensagem(
+    game,
+    sport_nome,
+    best,
+    books,
+    resultado,
+    is_soccer,
+    minutos
+):
+
+    if is_soccer:
+        tipo = "⚽ FUTEBOL — 3 RESULTADOS"
+    else:
+        tipo = "🏆 2 RESULTADOS"
+
+    lucro_pct = resultado["lucro_percentual"]
+    retorno = resultado["retorno"]
+    lucro = resultado["lucro"]
+
+    home = game.get("home_team", "?")
+    away = game.get("away_team", "?")
+
+    texto = ""
+
+    texto += "🚨 <b>SUREBET TURBO V3</b> 🚨\n\n"
+    texto += f"<b>{tipo}</b>\n"
+    texto += f"💰 Margem matemática: <b>{lucro_pct:.2f}%</b>\n"
+    texto += f"⏰ Começa em: <b>{minutos} min</b>\n\n"
+    texto += f"⚽ <b>{home} x {away}</b>\n\n"
+
+    texto += "💵 <b>DIVISÃO DA BANCA — R$100</b>\n\n"
+
+    for resultado_nome, odd in best.items():
+
+        stake = resultado["stakes"][resultado_nome]
+
+        bookmaker = books.get(
+            resultado_nome,
+            "Casa"
+        )
+
+        texto += (
+            f"👉 <b>{resultado_nome}</b>\n"
+            f"R${stake:.2f} @ <b>{odd:.2f}</b>\n"
+            f"🏠 {bookmaker}\n\n"
+        )
+
+    texto += "━━━━━━━━━━━━━━━━\n"
+    texto += f"💰 Retorno: <b>R${retorno:.2f}</b>\n"
+    texto += f"📈 Lucro teórico: <b>R${lucro:.2f}</b>\n"
+    texto += "━━━━━━━━━━━━━━━━\n\n"
+    texto += "⚠️ Odds podem mudar antes da confirmação.\n"
+    texto += "⚠️ Confira as odds nas casas antes de apostar."
+
+    return texto
