@@ -12,27 +12,23 @@ from datetime import datetime, timezone
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
-
 ODDS_REGION = os.getenv("ODDS_REGION", "br")
 
-# Banca usada somente para calcular a divisão
 BANCA = 100.00
 
 # Intervalo entre os ciclos
 INTERVALO_CICLO = 60
 
-# Só alerta quando a soma das inversas for menor que 0.99
-# Isso representa margem matemática superior a aproximadamente 1%
+# Surebet mínima
 INVERSA_MAX = 0.99
 
-# Para o robô não gastar a cota até zerar
+# Proteção da cota
 CREDITOS_MINIMOS = 5
 
-# Memória máxima de jogos já alertados
 MAX_ALERTAS_MEMORIA = 3000
 
-# Timeout das consultas
 TIMEOUT_API = 20
+
 
 # ============================================================
 # CONTROLE
@@ -70,13 +66,23 @@ def home():
         else "desconhecido"
     )
 
+    usado = (
+        CREDITOS_USADOS
+        if CREDITOS_USADOS is not None
+        else "desconhecido"
+    )
+
+    ultima = (
+        CUSTO_ULTIMA_CHAMADA
+        if CUSTO_ULTIMA_CHAMADA is not None
+        else "desconhecido"
+    )
+
     return (
         "<h2>SUREBET TURBO V4 ON</h2>"
         f"<b>Créditos restantes:</b> {restante}<br>"
-        f"<b>Créditos usados:</b> "
-        f"{CREDITOS_USADOS if CREDITOS_USADOS is not None else 'desconhecido'}<br>"
-        f"<b>Última chamada:</b> "
-        f"{CUSTO_ULTIMA_CHAMADA if CUSTO_ULTIMA_CHAMADA is not None else 'desconhecido'}<br>"
+        f"<b>Créditos usados:</b> {usado}<br>"
+        f"<b>Última chamada:</b> {ultima}<br>"
         f"<b>Região:</b> {ODDS_REGION}<br>"
         f"<b>Intervalo:</b> {INTERVALO_CICLO}s<br>"
         f"<b>Última consulta:</b> "
@@ -84,7 +90,7 @@ def home():
         f"<b>Jogos:</b> {total_jogos_consultados}<br>"
         f"<b>Surebets:</b> {total_surebets}<br>"
         f"<b>Erros API:</b> {total_erros_api}<br>"
-        f"<b>Alertas na memória:</b> {len(alertas_enviados)}<br>"
+        f"<b>Alertas:</b> {len(alertas_enviados)}<br>"
         f"<b>Status:</b> {ultimo_status}"
     )
 
@@ -111,7 +117,9 @@ def send(msg):
 
     if not BOT_TOKEN or not CHAT_ID:
 
-        print("❌ BOT_TOKEN ou CHAT_ID não configurado.")
+        print(
+            "❌ BOT_TOKEN ou CHAT_ID não configurado."
+        )
 
         return False
 
@@ -141,13 +149,18 @@ def send(msg):
 
             return False
 
-        print("📲 Telegram: mensagem enviada.")
+        print(
+            "📲 Telegram: mensagem enviada."
+        )
 
         return True
 
     except Exception as e:
 
-        print("❌ Erro Telegram:", e)
+        print(
+            "❌ Erro Telegram:",
+            e
+        )
 
         return False
 
@@ -312,7 +325,10 @@ def obter_melhores_odds(game):
 
                     price = float(price)
 
-                except Exception:
+                except (
+                    TypeError,
+                    ValueError
+                ):
 
                     continue
 
@@ -350,16 +366,13 @@ def verificar_mercado(
 
         nomes = set(best.keys())
 
-        # Precisa existir odd para o mandante
         if home not in nomes:
             return False
 
-        # Precisa existir odd para o visitante
         if away not in nomes:
             return False
 
-        # Procurar empate
-        empate = None
+        empate = False
 
         for nome in nomes:
 
@@ -368,20 +381,17 @@ def verificar_mercado(
                 "empate"
             ):
 
-                empate = nome
-
+                empate = True
                 break
 
-        if empate is None:
+        if not empate:
             return False
 
-        # Futebol precisa ter exatamente 3 resultados
         if len(best) != 3:
             return False
 
         return True
 
-    # Outros esportes precisam ter 2 resultados
     if len(best) != 2:
         return False
 
@@ -403,7 +413,6 @@ def calcular_surebet(best):
 
         inversa += 1.0 / odd
 
-    # Não existe arbitragem válida
     if inversa >= INVERSA_MAX:
         return None
 
@@ -479,7 +488,7 @@ def minutos_ate_jogo(game):
 
 
 # ============================================================
-# MENSAGEM TELEGRAM
+# MENSAGEM
 # ============================================================
 
 def montar_mensagem(
@@ -514,48 +523,16 @@ def montar_mensagem(
         "?"
     )
 
-    lucro_pct = resultado[
-        "lucro_percentual"
-    ]
-
-    retorno = resultado[
-        "retorno"
-    ]
-
-    lucro = resultado[
-        "lucro"
-    ]
-
-    texto = ""
-
-    texto += (
+    texto = (
         "🚨 <b>SUREBET TURBO V4</b> 🚨\n\n"
-    )
-
-    texto += (
         f"<b>{tipo}</b>\n"
-    )
-
-    texto += (
         f"💰 Margem matemática: "
-        f"<b>{lucro_pct:.2f}%</b>\n"
-    )
-
-    texto += (
+        f"<b>{resultado['lucro_percentual']:.2f}%</b>\n"
         f"⏰ Começa em: "
         f"<b>{minutos} min</b>\n"
-    )
-
-    texto += (
         f"🏆 Esporte: "
         f"<b>{sport_nome}</b>\n\n"
-    )
-
-    texto += (
         f"⚽ <b>{home} x {away}</b>\n\n"
-    )
-
-    texto += (
         "💵 <b>DIVISÃO DA BANCA — R$100</b>\n\n"
     )
 
@@ -577,4 +554,164 @@ def montar_mensagem(
             f"🏠 {bookmaker}\n\n"
         )
 
-    texto +=
+    texto += (
+        "━━━━━━━━━━━━━━━━\n"
+        f"💰 Retorno: "
+        f"<b>R${resultado['retorno']:.2f}</b>\n"
+        f"📈 Lucro teórico: "
+        f"<b>R${resultado['lucro']:.2f}</b>\n"
+        "━━━━━━━━━━━━━━━━\n\n"
+        "⚠️ Odds podem mudar antes da confirmação.\n"
+        "⚠️ Confira as odds nas casas antes de apostar."
+    )
+
+    return texto
+
+
+# ============================================================
+# CRÉDITOS
+# ============================================================
+
+def atualizar_creditos(response):
+
+    global CREDITOS_RESTANTES
+    global CREDITOS_USADOS
+    global CUSTO_ULTIMA_CHAMADA
+
+    restante = response.headers.get(
+        "x-requests-remaining"
+    )
+
+    usado = response.headers.get(
+        "x-requests-used"
+    )
+
+    ultimo = response.headers.get(
+        "x-requests-last"
+    )
+
+    try:
+
+        if restante is not None:
+
+            CREDITOS_RESTANTES = int(
+                restante
+            )
+
+    except (
+        TypeError,
+        ValueError
+    ):
+
+        pass
+
+    try:
+
+        if usado is not None:
+
+            CREDITOS_USADOS = int(
+                usado
+            )
+
+    except (
+        TypeError,
+        ValueError
+    ):
+
+        pass
+
+    try:
+
+        if ultimo is not None:
+
+            CUSTO_ULTIMA_CHAMADA = int(
+                ultimo
+            )
+
+    except (
+        TypeError,
+        ValueError
+    ):
+
+        pass
+
+    print(
+        "💳 CRÉDITOS | "
+        f"restantes={CREDITOS_RESTANTES} | "
+        f"usados={CREDITOS_USADOS} | "
+        f"última={CUSTO_ULTIMA_CHAMADA}"
+    )
+
+
+# ============================================================
+# CONSULTAR ODDS
+# ============================================================
+
+def consultar_esporte(sport):
+
+    global total_erros_api
+
+    if not ODDS_API_KEY:
+
+        print(
+            "❌ ODDS_API_KEY não configurada."
+        )
+
+        return []
+
+    url = (
+        "https://api.the-odds-api.com/v4/"
+        f"sports/{sport['key']}/odds"
+    )
+
+    params = {
+        "apiKey": ODDS_API_KEY,
+        "regions": ODDS_REGION,
+        "markets": "h2h",
+        "oddsFormat": "decimal"
+    }
+
+    try:
+
+        response = requests.get(
+            url,
+            params=params,
+            timeout=TIMEOUT_API
+        )
+
+        atualizar_creditos(
+            response
+        )
+
+        if response.status_code != 200:
+
+            total_erros_api += 1
+
+            print(
+                f"❌ API {sport['nome']}: "
+                f"{response.status_code}"
+            )
+
+            print(
+                response.text[:500]
+            )
+
+            return []
+
+        dados = response.json()
+
+        if not isinstance(
+            dados,
+            list
+        ):
+
+            return []
+
+        print(
+            f"📊 {sport['nome']}: "
+            f"{len(dados)} jogos recebidos."
+        )
+
+        return dados
+
+    except Exception as
