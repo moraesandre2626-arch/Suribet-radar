@@ -112,3 +112,7 @@ def scan():
                 historico[chave] = res["preco"]
             time.sleep(2)
     return {"status": "scan feito", "historico": historico}
+import uvicorn
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
