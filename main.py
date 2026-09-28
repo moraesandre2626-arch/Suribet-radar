@@ -1,35 +1,56 @@
+# ============================================================
+# PRICE RADAR V5.1
+# AMAZON + MERCADO LIVRE + SHOPEE
+# TELEGRAM COM BOTÕES CLICÁVEIS
+# ============================================================
+
 import os
-import requests
-from bs4 import BeautifulSoup
-import telegram
-from telegram.constants import ParseMode
-import asyncio
-import threading
+import re
+import json
 import time
 import hashlib
-import json
+import threading
+import asyncio
+import requests
+
+from bs4 import BeautifulSoup
 from flask import Flask
 
+import telegram
+from telegram.constants import ParseMode
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+
 # ============================================================
-# ACHADOS CELULARES AMAZON - V4
-# ============================================================
-# Busca ofertas de celulares na Amazon Brasil
-# Link de afiliado automático
-# Tag Amazon: suribet06-20
-# Telegram
-# Anti-repetição
-# Histórico local
-# Render / Flask
+# FLASK / RENDER
 # ============================================================
 
 app = Flask(__name__)
 
-@app.route('/')
+
+@app.route("/")
 def home():
     return {
-        "status": "Achados Celulares Amazon V4 ONLINE",
+        "status": "PRICE RADAR V5.1 ONLINE",
         "bot": "Ativo",
-        "loja": "Amazon"
+        "lojas": [
+            "Amazon",
+            "Mercado Livre",
+            "Shopee"
+        ],
+        "telegram_botoes": True
+    }
+
+
+@app.route("/status")
+def status():
+    return {
+        "status": "ONLINE",
+        "versao": "V5.1",
+        "amazon": "ATIVA",
+        "mercado_livre": "ATIVO",
+        "shopee": "ATIVA",
+        "botoes_telegram": "ATIVOS"
     }
 
 
@@ -45,18 +66,57 @@ TOKEN = (
 
 CHAT_ID = os.getenv("CHAT_ID")
 
-# Sua tag de afiliado Amazon
-TAG = (
+
+# ============================================================
+# AMAZON
+# ============================================================
+
+TAG_AMAZON = (
     os.getenv("TAG_AMAZON")
     or os.getenv("TAG_AM")
     or "suribet06-20"
 )
 
-# Intervalo entre ciclos
-INTERVALO_CICLO = 7200  # 2 horas
 
-# Arquivo de histórico
-HISTORICO_FILE = "historico_amazon.json"
+# ============================================================
+# MERCADO LIVRE
+# ============================================================
+
+ML_AFILIADO = os.getenv(
+    "ML_AFILIADO",
+    "https://meli.la/19nLNPe"
+)
+
+
+# ============================================================
+# SHOPEE
+# ============================================================
+
+SHOPEE_AFILIADO = os.getenv(
+    "SHOPEE_AFILIADO",
+    "https://s.shopee.com.br/1BMi2RMcej"
+)
+
+SHOPEE_VITRINE = os.getenv(
+    "SHOPEE_VITRINE",
+    "https://collshp.com/shops2023?view=storefront"
+)
+
+
+# ============================================================
+# CONFIGURAÇÃO DO RADAR
+# ============================================================
+
+HISTORICO_FILE = "radar_historico_v51.json"
+
+INTERVALO_CICLO = int(
+    os.getenv(
+        "INTERVALO_CICLO",
+        "7200"
+    )
+)
+
+PAUSA_BUSCAS = 4
 
 
 # ============================================================
@@ -64,6 +124,7 @@ HISTORICO_FILE = "historico_amazon.json"
 # ============================================================
 
 BUSCAS = [
+
     "iPhone 13 128GB",
     "iPhone 14 128GB",
     "iPhone 15 128GB",
@@ -94,13 +155,25 @@ BUSCAS = [
 # ============================================================
 
 HEADERS = {
+
     "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Mozilla/5.0 "
+        "(Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
         "Chrome/139.0 Safari/537.36"
     ),
-    "Accept-Language": "pt-BR,pt;q=0.9"
+
+    "Accept-Language":
+        "pt-BR,pt;q=0.9"
 }
+
+
+SESSION = requests.Session()
+
+SESSION.headers.update(
+    HEADERS
+)
 
 
 # ============================================================
@@ -110,23 +183,34 @@ HEADERS = {
 def carregar_historico():
 
     try:
-        if os.path.exists(HISTORICO_FILE):
+
+        if os.path.exists(
+            HISTORICO_FILE
+        ):
 
             with open(
                 HISTORICO_FILE,
                 "r",
                 encoding="utf-8"
-            ) as f:
+            ) as arquivo:
 
-                return json.load(f)
+                return json.load(
+                    arquivo
+                )
 
-    except Exception as e:
-        print("Erro ao carregar histórico:", e)
+    except Exception as erro:
+
+        print(
+            "Erro carregando histórico:",
+            erro
+        )
 
     return {}
 
 
-def salvar_historico(historico):
+def salvar_historico(
+    historico
+):
 
     try:
 
@@ -134,78 +218,167 @@ def salvar_historico(historico):
             HISTORICO_FILE,
             "w",
             encoding="utf-8"
-        ) as f:
+        ) as arquivo:
 
             json.dump(
                 historico,
-                f,
+                arquivo,
                 ensure_ascii=False,
                 indent=2
             )
 
-    except Exception as e:
-        print("Erro ao salvar histórico:", e)
+    except Exception as erro:
+
+        print(
+            "Erro salvando histórico:",
+            erro
+        )
 
 
 # ============================================================
-# ID DO PRODUTO
+# PREÇO
 # ============================================================
 
-def gerar_id(titulo, link):
+def converter_preco(
+    valor
+):
 
-    base = f"{titulo}|{link}"
+    if not valor:
+
+        return None
+
+    texto = str(
+        valor
+    )
+
+    texto = (
+        texto
+        .replace(
+            "R$",
+            ""
+        )
+        .replace(
+            "\xa0",
+            " "
+        )
+        .strip()
+    )
+
+    texto = re.sub(
+        r"[^\d,.]",
+        "",
+        texto
+    )
+
+    if not texto:
+
+        return None
+
+    try:
+
+        if "," in texto:
+
+            texto = texto.replace(
+                ".",
+                ""
+            )
+
+            texto = texto.replace(
+                ",",
+                "."
+            )
+
+        return float(
+            texto
+        )
+
+    except Exception:
+
+        return None
+
+
+def formatar_preco(
+    valor
+):
+
+    if valor is None:
+
+        return "Preço não identificado"
+
+    return (
+        "R$ "
+        +
+        f"{valor:,.2f}"
+        .replace(
+            ",",
+            "X"
+        )
+        .replace(
+            ".",
+            ","
+        )
+        .replace(
+            "X",
+            "."
+        )
+    )
+
+
+# ============================================================
+# ID
+# ============================================================
+
+def gerar_id(
+    loja,
+    titulo,
+    link
+):
+
+    base = (
+        f"{loja}|"
+        f"{titulo}|"
+        f"{link}"
+    )
 
     return hashlib.md5(
-        base.encode("utf-8")
+        base.encode(
+            "utf-8"
+        )
     ).hexdigest()
 
 
 # ============================================================
-# LIMPAR PREÇO
+# AMAZON
 # ============================================================
 
-def limpar_preco(preco):
+def buscar_amazon(
+    busca
+):
 
-    if not preco:
-        return "Ver preço"
-
-    preco = preco.strip()
-
-    preco = (
-        preco
-        .replace("\n", " ")
-        .replace("  ", " ")
+    print(
+        f"🟠 AMAZON → {busca}"
     )
-
-    return preco
-
-
-# ============================================================
-# BUSCAR AMAZON
-# ============================================================
-
-def buscar_oferta(busca):
-
-    url_busca = (
-        "https://www.amazon.com.br/s?k="
-        + requests.utils.quote(busca)
-    )
-
-    print(f"🔎 Procurando: {busca}")
 
     try:
 
-        resposta = requests.get(
-            url_busca,
-            headers=HEADERS,
-            timeout=20
+        url = (
+            "https://www.amazon.com.br/s?k="
+            +
+            requests.utils.quote(
+                busca
+            )
+        )
+
+        resposta = SESSION.get(
+            url,
+            timeout=25
         )
 
         if resposta.status_code != 200:
 
             print(
-                f"Amazon retornou HTTP "
-                f"{resposta.status_code}"
+                "Amazon HTTP:",
+                resposta.status_code
             )
 
             return None
@@ -219,127 +392,885 @@ def buscar_oferta(busca):
             '[data-component-type="s-search-result"]'
         )
 
-        if not itens:
+        for item in itens[:10]:
 
-            print(
-                f"❌ Nenhum resultado: {busca}"
-            )
-
-            return None
-
-        # Procurar até alguns resultados
-        # para evitar pegar item patrocinado
-        # ou resultado sem preço.
-
-        for item in itens[:8]:
-
-            titulo_tag = item.select_one("h2")
-
-            if not titulo_tag:
-                continue
-
-            titulo = titulo_tag.get_text(
-                " ",
-                strip=True
+            titulo_tag = item.select_one(
+                "h2"
             )
 
             link_tag = item.select_one(
                 "h2 a"
             )
 
-            if not link_tag:
+            if (
+                not titulo_tag
+                or
+                not link_tag
+            ):
+
                 continue
 
-            link_rel = link_tag.get(
+            titulo = (
+                titulo_tag
+                .get_text(
+                    " ",
+                    strip=True
+                )
+            )
+
+            href = link_tag.get(
                 "href",
                 ""
             )
 
-            if not link_rel:
+            if not href:
+
                 continue
 
-            # Remove parâmetros antigos
-            link_rel = link_rel.split("?")[0]
+            href = href.split(
+                "?"
+            )[0]
 
             link = (
                 "https://www.amazon.com.br"
-                + link_rel
-                + f"?tag={TAG}"
+                +
+                href
+                +
+                f"?tag={TAG_AMAZON}"
             )
 
             preco_tag = item.select_one(
                 ".a-price .a-offscreen"
             )
 
-            preco = (
-                limpar_preco(
+            preco = None
+
+            if preco_tag:
+
+                preco = converter_preco(
                     preco_tag.get_text(
                         strip=True
                     )
                 )
-                if preco_tag
-                else "Ver preço"
-            )
+
+            imagem = None
 
             imagem_tag = item.select_one(
                 "img.s-image"
             )
 
-            imagem = (
-                imagem_tag.get("src")
-                if imagem_tag
-                else None
-            )
+            if imagem_tag:
 
-            produto = {
+                imagem = (
+                    imagem_tag.get(
+                        "src"
+                    )
+                )
+
+            return {
+
+                "loja": "Amazon",
+
                 "busca": busca,
-                "titulo": titulo[:150],
+
+                "titulo":
+                    titulo[:150],
+
                 "preco": preco,
+
                 "link": link,
-                "img": imagem
+
+                "imagem": imagem
+
             }
 
-            print(
-                f"✅ Encontrado: {titulo[:70]}"
-            )
-
-            return produto
-
-        print(
-            f"❌ Nenhum produto válido: {busca}"
-        )
-
         return None
 
-    except Exception as e:
+    except Exception as erro:
 
         print(
-            f"❌ Erro Amazon ({busca}): {e}"
+            "Erro Amazon:",
+            erro
         )
 
         return None
 
 
 # ============================================================
-# VERIFICAR REPETIÇÃO
+# MERCADO LIVRE
 # ============================================================
 
-def produto_novo(produto, historico):
+def buscar_mercado_livre(
+    busca
+):
 
-    produto_id = gerar_id(
-        produto["titulo"],
-        produto["link"]
+    print(
+        f"🟡 MERCADO LIVRE → {busca}"
     )
 
-    if produto_id in historico:
+    try:
 
-        return False, produto_id
+        url = (
+            "https://lista.mercadolivre.com.br/"
+            +
+            requests.utils.quote(
+                busca.replace(
+                    " ",
+                    "-"
+                )
+            )
+        )
 
-    return True, produto_id
+        resposta = SESSION.get(
+            url,
+            timeout=25
+        )
+
+        if resposta.status_code != 200:
+
+            print(
+                "Mercado Livre HTTP:",
+                resposta.status_code
+            )
+
+            return None
+
+        soup = BeautifulSoup(
+            resposta.text,
+            "lxml"
+        )
+
+        itens = soup.select(
+            "li.ui-search-layout__item"
+        )
+
+        if not itens:
+
+            itens = soup.select(
+                ".ui-search-result"
+            )
+
+        for item in itens[:10]:
+
+            titulo_tag = (
+                item.select_one(
+                    "h2"
+                )
+                or
+                item.select_one(
+                    ".poly-component__title"
+                )
+            )
+
+            if not titulo_tag:
+
+                continue
+
+            titulo = (
+                titulo_tag
+                .get_text(
+                    " ",
+                    strip=True
+                )
+            )
+
+            link_tag = item.select_one(
+                "a"
+            )
+
+            if not link_tag:
+
+                continue
+
+            link = link_tag.get(
+                "href",
+                ""
+            )
+
+            if not link:
+
+                continue
+
+            preco = None
+
+            preco_tag = (
+                item.select_one(
+                    ".andes-money-amount__fraction"
+                )
+                or
+                item.select_one(
+                    ".price-tag-fraction"
+                )
+            )
+
+            if preco_tag:
+
+                texto_preco = (
+                    preco_tag
+                    .get_text(
+                        " ",
+                        strip=True
+                    )
+                )
+
+                centavos = (
+                    item.select_one(
+                        ".andes-money-amount__cents"
+                    )
+                )
+
+                if centavos:
+
+                    texto_preco += (
+                        ","
+                        +
+                        centavos.get_text(
+                            strip=True
+                        )
+                    )
+
+                preco = converter_preco(
+                    texto_preco
+                )
+
+            imagem = None
+
+            imagem_tag = item.select_one(
+                "img"
+            )
+
+            if imagem_tag:
+
+                imagem = (
+                    imagem_tag.get(
+                        "src"
+                    )
+                    or
+                    imagem_tag.get(
+                        "data-src"
+                    )
+                )
+
+            return {
+
+                "loja":
+                    "Mercado Livre",
+
+                "busca":
+                    busca,
+
+                "titulo":
+                    titulo[:150],
+
+                "preco":
+                    preco,
+
+                "link":
+                    link,
+
+                "imagem":
+                    imagem,
+
+                "afiliado_base":
+                    ML_AFILIADO
+
+            }
+
+        return None
+
+    except Exception as erro:
+
+        print(
+            "Erro Mercado Livre:",
+            erro
+        )
+
+        return None
 
 
 # ============================================================
-# REGISTRAR PRODUTO
+# SHOPEE
+# ============================================================
+
+def buscar_shopee(
+    busca
+):
+
+    print(
+        f"🟠 SHOPEE → {busca}"
+    )
+
+    try:
+
+        url = (
+            "https://shopee.com.br/search?keyword="
+            +
+            requests.utils.quote(
+                busca
+            )
+        )
+
+        resposta = SESSION.get(
+            url,
+            timeout=25
+        )
+
+        if resposta.status_code != 200:
+
+            print(
+                "Shopee HTTP:",
+                resposta.status_code
+            )
+
+            return {
+
+                "loja": "Shopee",
+
+                "busca": busca,
+
+                "titulo": busca,
+
+                "preco": None,
+
+                "link": url,
+
+                "imagem": None,
+
+                "afiliado_base":
+                    SHOPEE_AFILIADO,
+
+                "vitrine":
+                    SHOPEE_VITRINE
+
+            }
+
+        soup = BeautifulSoup(
+            resposta.text,
+            "lxml"
+        )
+
+        links = soup.select(
+            'a[href*="-i."]'
+        )
+
+        for link_tag in links[:20]:
+
+            href = link_tag.get(
+                "href",
+                ""
+            )
+
+            if not href:
+
+                continue
+
+            titulo = (
+                link_tag
+                .get_text(
+                    " ",
+                    strip=True
+                )
+            )
+
+            if not titulo:
+
+                titulo = busca
+
+            if href.startswith(
+                "/"
+            ):
+
+                link_produto = (
+                    "https://shopee.com.br"
+                    +
+                    href
+                )
+
+            else:
+
+                link_produto = href
+
+            return {
+
+                "loja":
+                    "Shopee",
+
+                "busca":
+                    busca,
+
+                "titulo":
+                    titulo[:150],
+
+                "preco":
+                    None,
+
+                "link":
+                    link_produto,
+
+                "imagem":
+                    None,
+
+                "afiliado_base":
+                    SHOPEE_AFILIADO,
+
+                "vitrine":
+                    SHOPEE_VITRINE
+
+            }
+
+        return {
+
+            "loja":
+                "Shopee",
+
+            "busca":
+                busca,
+
+            "titulo":
+                busca,
+
+            "preco":
+                None,
+
+            "link":
+                url,
+
+            "imagem":
+                None,
+
+            "afiliado_base":
+                SHOPEE_AFILIADO,
+
+            "vitrine":
+                SHOPEE_VITRINE
+
+        }
+
+    except Exception as erro:
+
+        print(
+            "Erro Shopee:",
+            erro
+        )
+
+        return None
+
+
+# ============================================================
+# BUSCAR TODAS
+# ============================================================
+
+def buscar_todas_lojas(
+    busca
+):
+
+    resultados = []
+
+    amazon = buscar_amazon(
+        busca
+    )
+
+    if amazon:
+
+        resultados.append(
+            amazon
+        )
+
+    time.sleep(
+        PAUSA_BUSCAS
+    )
+
+    mercado_livre = (
+        buscar_mercado_livre(
+            busca
+        )
+    )
+
+    if mercado_livre:
+
+        resultados.append(
+            mercado_livre
+        )
+
+    time.sleep(
+        PAUSA_BUSCAS
+    )
+
+    shopee = buscar_shopee(
+        busca
+    )
+
+    if shopee:
+
+        resultados.append(
+            shopee
+        )
+
+    return resultados
+
+
+# ============================================================
+# MENOR PREÇO
+# ============================================================
+
+def encontrar_menor_preco(
+    resultados
+):
+
+    produtos_com_preco = [
+
+        produto
+
+        for produto in resultados
+
+        if produto.get(
+            "preco"
+        ) is not None
+
+    ]
+
+    if not produtos_com_preco:
+
+        return None
+
+    return min(
+        produtos_com_preco,
+        key=lambda produto:
+            produto["preco"]
+    )
+
+
+# ============================================================
+# BOTÕES TELEGRAM
+# ============================================================
+
+def criar_botoes(
+    resultados
+):
+
+    botoes = []
+
+    amazon = next(
+        (
+            x
+            for x in resultados
+            if x["loja"] == "Amazon"
+        ),
+        None
+    )
+
+    ml = next(
+        (
+            x
+            for x in resultados
+            if x["loja"] ==
+            "Mercado Livre"
+        ),
+        None
+    )
+
+    shopee = next(
+        (
+            x
+            for x in resultados
+            if x["loja"] ==
+            "Shopee"
+        ),
+        None
+    )
+
+    # --------------------------------------------
+    # AMAZON
+    # --------------------------------------------
+
+    if amazon:
+
+        botoes.append(
+            InlineKeyboardButton(
+                "🟠 AMAZON",
+                url=amazon["link"]
+            )
+        )
+
+    # --------------------------------------------
+    # MERCADO LIVRE
+    # --------------------------------------------
+
+    if ml:
+
+        botoes.append(
+            InlineKeyboardButton(
+                "🟡 MERCADO LIVRE",
+                url=ml["link"]
+            )
+        )
+
+    # --------------------------------------------
+    # SHOPEE
+    # --------------------------------------------
+
+    if shopee:
+
+        botoes.append(
+            InlineKeyboardButton(
+                "🟠 MINHA VITRINE SHOPEE",
+                url=SHOPEE_VITRINE
+            )
+        )
+
+    # --------------------------------------------
+    # LINK DE AFILIADO SHOPEE
+    # --------------------------------------------
+
+    if shopee:
+
+        botoes.append(
+            InlineKeyboardButton(
+                "🛍️ LINK SHOPEE",
+                url=SHOPEE_AFILIADO
+            )
+        )
+
+    # --------------------------------------------
+    # ORGANIZAÇÃO DOS BOTÕES
+    # --------------------------------------------
+
+    teclado = []
+
+    linha = []
+
+    for botao in botoes:
+
+        linha.append(
+            botao
+        )
+
+        if len(linha) == 2:
+
+            teclado.append(
+                linha
+            )
+
+            linha = []
+
+    if linha:
+
+        teclado.append(
+            linha
+        )
+
+    return InlineKeyboardMarkup(
+        teclado
+    )
+
+
+# ============================================================
+# MENSAGEM
+# ============================================================
+
+def montar_mensagem(
+    busca,
+    resultados,
+    menor_preco
+):
+
+    linhas = []
+
+    linhas.append(
+        "🔥 *ACHADO DE CELULAR*"
+    )
+
+    linhas.append("")
+
+    linhas.append(
+        f"📱 *{busca.upper()}*"
+    )
+
+    linhas.append("")
+
+    # AMAZON
+    amazon = next(
+        (
+            x
+            for x in resultados
+            if x["loja"] ==
+            "Amazon"
+        ),
+        None
+    )
+
+    if amazon:
+
+        linhas.append(
+            "🟠 *AMAZON*"
+        )
+
+        linhas.append(
+            f"💰 "
+            f"{formatar_preco(amazon['preco'])}"
+        )
+
+        linhas.append("")
+
+    # MERCADO LIVRE
+    ml = next(
+        (
+            x
+            for x in resultados
+            if x["loja"] ==
+            "Mercado Livre"
+        ),
+        None
+    )
+
+    if ml:
+
+        linhas.append(
+            "🟡 *MERCADO LIVRE*"
+        )
+
+        linhas.append(
+            f"💰 "
+            f"{formatar_preco(ml['preco'])}"
+        )
+
+        linhas.append("")
+
+    # SHOPEE
+    shopee = next(
+        (
+            x
+            for x in resultados
+            if x["loja"] ==
+            "Shopee"
+        ),
+        None
+    )
+
+    if shopee:
+
+        linhas.append(
+            "🟠 *SHOPEE*"
+        )
+
+        if shopee.get(
+            "preco"
+        ):
+
+            linhas.append(
+                f"💰 "
+                f"{formatar_preco("
+                    shopee['preco']
+                )}"
+            )
+
+        else:
+
+            linhas.append(
+                "💰 Consulte na vitrine"
+            )
+
+        linhas.append("")
+
+    # MENOR PREÇO
+    if menor_preco:
+
+        linhas.append(
+            "🔥 *MENOR PREÇO "
+            "IDENTIFICADO*"
+        )
+
+        linhas.append(
+            f"🏷️ "
+            f"{menor_preco['loja']}"
+        )
+
+        linhas.append(
+            f"💰 "
+            f"{formatar_preco("
+                menor_preco['preco']
+            )}"
+        )
+
+        linhas.append("")
+
+    linhas.append(
+        "👇 *ESCOLHA ONDE COMPRAR:*"
+    )
+
+    return "\n".join(
+        linhas
+    )
+
+
+# ============================================================
+# ENVIAR TELEGRAM
+# ============================================================
+
+async def enviar_telegram(
+    bot,
+    mensagem,
+    botoes
+):
+
+    try:
+
+        await bot.send_message(
+
+            chat_id=CHAT_ID,
+
+            text=mensagem,
+
+            parse_mode=ParseMode.MARKDOWN,
+
+            reply_markup=botoes,
+
+            disable_web_page_preview=True
+
+        )
+
+        print(
+            "📨 Oferta enviada "
+            "com botões!"
+        )
+
+        return True
+
+    except Exception as erro:
+
+        print(
+            "Erro Telegram:",
+            erro
+        )
+
+        try:
+
+            await bot.send_message(
+
+                chat_id=CHAT_ID,
+
+                text=mensagem,
+
+                reply_markup=botoes,
+
+                disable_web_page_preview=True
+
+            )
+
+            return True
+
+        except Exception as erro2:
+
+            print(
+                "Erro Telegram final:",
+                erro2
+            )
+
+            return False
+
+
+# ============================================================
+# REGISTRAR
 # ============================================================
 
 def registrar_produto(
@@ -348,187 +1279,207 @@ def registrar_produto(
     historico
 ):
 
-    historico[produto_id] = {
-        "titulo": produto["titulo"],
-        "preco": produto["preco"],
-        "link": produto["link"],
-        "busca": produto["busca"],
-        "timestamp": time.time()
+    historico[
+        produto_id
+    ] = {
+
+        "loja":
+            produto["loja"],
+
+        "titulo":
+            produto["titulo"],
+
+        "preco":
+            produto["preco"],
+
+        "link":
+            produto["link"],
+
+        "data":
+            time.time()
+
     }
 
-    # Limita histórico
-    if len(historico) > 1000:
+    if len(
+        historico
+    ) > 1500:
 
         historico = dict(
-            list(historico.items())[-800:]
+            list(
+                historico.items()
+            )[-1200:]
         )
 
-    salvar_historico(historico)
+    salvar_historico(
+        historico
+    )
 
     return historico
 
 
 # ============================================================
-# MONTAR MENSAGEM
+# CICLO
 # ============================================================
 
-def montar_mensagem(produto):
-
-    return (
-        "⚡ *ACHADO DE CELULAR*\n\n"
-        f"📱 *{produto['titulo']}*\n\n"
-        f"💰 *Preço: {produto['preco']}*\n\n"
-        "🛒 *COMPRE NA AMAZON:*\n"
-        f"{produto['link']}\n\n"
-        "⏰ Confira o preço antes de comprar!"
-    )
-
-
-# ============================================================
-# ENVIAR TELEGRAM
-# ============================================================
-
-async def enviar_produto(bot, produto):
-
-    texto = montar_mensagem(produto)
-
-    try:
-
-        if produto.get("img"):
-
-            await bot.send_photo(
-                chat_id=CHAT_ID,
-                photo=produto["img"],
-                caption=texto,
-                parse_mode=ParseMode.MARKDOWN
-            )
-
-        else:
-
-            await bot.send_message(
-                chat_id=CHAT_ID,
-                text=texto,
-                parse_mode=ParseMode.MARKDOWN
-            )
-
-        print(
-            "📨 Oferta enviada para Telegram"
-        )
-
-        return True
-
-    except Exception as e:
-
-        print(
-            "Erro ao enviar oferta:",
-            e
-        )
-
-        try:
-
-            await bot.send_message(
-                chat_id=CHAT_ID,
-                text=texto,
-                parse_mode=ParseMode.MARKDOWN
-            )
-
-            return True
-
-        except Exception as e2:
-
-            print(
-                "Falha no envio alternativo:",
-                e2
-            )
-
-            return False
-
-
-# ============================================================
-# CICLO DE BUSCA
-# ============================================================
-
-async def executar_ciclo(bot):
-
-    historico = carregar_historico()
-
-    encontrados = 0
-    enviados = 0
+async def executar_ciclo(
+    bot
+):
 
     print("")
-    print("=" * 60)
-    print("🚀 NOVO CICLO DE BUSCA")
-    print("=" * 60)
+    print(
+        "=" * 65
+    )
 
-    for busca in BUSCAS:
+    print(
+        "🚀 PRICE RADAR V5.1"
+    )
+
+    print(
+        "🔎 NOVO CICLO"
+    )
+
+    print(
+        "=" * 65
+    )
+
+    historico = (
+        carregar_historico()
+    )
+
+    enviados = 0
+
+    for numero, busca in enumerate(
+        BUSCAS,
+        start=1
+    ):
+
+        print("")
+        print(
+            f"📱 [{numero}/"
+            f"{len(BUSCAS)}] "
+            f"{busca}"
+        )
 
         try:
 
-            produto = buscar_oferta(busca)
-
-            if not produto:
-                continue
-
-            encontrados += 1
-
-            novo, produto_id = produto_novo(
-                produto,
-                historico
+            resultados = (
+                buscar_todas_lojas(
+                    busca
+                )
             )
 
-            if not novo:
+            if not resultados:
 
                 print(
-                    f"⏭️ Já enviado: "
-                    f"{produto['titulo'][:60]}"
+                    "❌ Nada encontrado"
                 )
 
                 continue
 
-            historico = registrar_produto(
-                produto,
-                produto_id,
-                historico
+            menor_preco = (
+                encontrar_menor_preco(
+                    resultados
+                )
             )
 
-            enviado = await enviar_produto(
-                bot,
-                produto
+            produto_referencia = (
+
+                menor_preco
+                if menor_preco
+                else resultados[0]
+
+            )
+
+            produto_id = gerar_id(
+
+                produto_referencia[
+                    "loja"
+                ],
+
+                produto_referencia[
+                    "titulo"
+                ],
+
+                produto_referencia[
+                    "link"
+                ]
+
+            )
+
+            if produto_id in historico:
+
+                print(
+                    "⏭️ Já enviado"
+                )
+
+                continue
+
+            mensagem = (
+                montar_mensagem(
+                    busca,
+                    resultados,
+                    menor_preco
+                )
+            )
+
+            botoes = (
+                criar_botoes(
+                    resultados
+                )
+            )
+
+            enviado = (
+                await enviar_telegram(
+                    bot,
+                    mensagem,
+                    botoes
+                )
             )
 
             if enviado:
 
+                historico = (
+                    registrar_produto(
+                        produto_referencia,
+                        produto_id,
+                        historico
+                    )
+                )
+
                 enviados += 1
 
-            # Pequena pausa entre buscas
-            await asyncio.sleep(5)
+            await asyncio.sleep(
+                PAUSA_BUSCAS
+            )
 
-        except Exception as e:
+        except Exception as erro:
 
             print(
-                f"Erro processando {busca}:",
-                e
+                f"❌ Erro em {busca}:",
+                erro
             )
 
     print("")
     print(
-        f"📊 Encontrados: {encontrados}"
+        "=" * 65
     )
 
     print(
-        f"📨 Enviados: {enviados}"
+        f"📨 ENVIADOS: {enviados}"
     )
 
     print(
-        f"🗂️ Histórico: {len(historico)}"
+        f"🗂️ HISTÓRICO: "
+        f"{len(historico)}"
     )
 
-    print("=" * 60)
-    print("")
+    print(
+        "=" * 65
+    )
 
 
 # ============================================================
-# LOOP PRINCIPAL
+# BOT LOOP
 # ============================================================
 
 async def bot_loop():
@@ -536,7 +1487,8 @@ async def bot_loop():
     if not TOKEN:
 
         print(
-            "❌ ERRO: TOKEN DO TELEGRAM NÃO CONFIGURADO"
+            "❌ TOKEN DO TELEGRAM "
+            "NÃO CONFIGURADO"
         )
 
         return
@@ -544,7 +1496,8 @@ async def bot_loop():
     if not CHAT_ID:
 
         print(
-            "❌ ERRO: CHAT_ID NÃO CONFIGURADO"
+            "❌ CHAT_ID "
+            "NÃO CONFIGURADO"
         )
 
         return
@@ -557,64 +1510,119 @@ async def bot_loop():
     print(
         "=========================================="
     )
+
     print(
-        "📱 ACHADOS CELULARES AMAZON V4"
+        "📡 PRICE RADAR V5.1"
     )
-    print(
-        "=========================================="
-    )
-    print(
-        f"🏷️ Tag afiliado: {TAG}"
-    )
-    print(
-        f"🔎 Modelos monitorados: {len(BUSCAS)}"
-    )
-    print(
-        f"⏱️ Intervalo: {INTERVALO_CICLO}s"
-    )
+
     print(
         "=========================================="
     )
 
-    # Mensagem inicial
+    print(
+        "🟠 Amazon: ATIVA"
+    )
+
+    print(
+        "🟡 Mercado Livre: ATIVO"
+    )
+
+    print(
+        "🟠 Shopee: ATIVA"
+    )
+
+    print(
+        "🔘 Botões Telegram: ATIVOS"
+    )
+
+    print(
+        f"🏷️ Amazon: {TAG_AMAZON}"
+    )
+
+    print(
+        f"🏪 Vitrine Shopee:"
+        f" {SHOPEE_VITRINE}"
+    )
+
+    print(
+        f"🔎 Modelos: "
+        f"{len(BUSCAS)}"
+    )
+
+    print(
+        "=========================================="
+    )
+
+    # --------------------------------------------
+    # MENSAGEM DE ATIVAÇÃO
+    # --------------------------------------------
+
     try:
 
         await bot.send_message(
+
             chat_id=CHAT_ID,
+
             text=(
-                "🚀 *ACHADOS CELULARES V4 ATIVADO!*\n\n"
-                "📱 Monitoramento da Amazon iniciado.\n"
-                f"🔎 {len(BUSCAS)} modelos monitorados.\n"
-                "🏷️ Links com afiliado automático.\n\n"
-                "⚡ O radar está procurando ofertas..."
+                "🚀 *PRICE RADAR V5.1 "
+                "ATIVADO!*\n\n"
+
+                "📱 Amazon + Mercado Livre "
+                "+ Shopee\n"
+
+                f"🔎 {len(BUSCAS)} "
+                "celulares monitorados\n"
+
+                "🏷️ Links preparados\n"
+
+                "🔘 Botões de compra "
+                "ativados\n"
+
+                "🏪 Sua vitrine Shopee "
+                "integrada\n\n"
+
+                "⚡ Radar procurando "
+                "ofertas..."
             ),
+
             parse_mode=ParseMode.MARKDOWN
+
         )
 
-    except Exception as e:
+    except Exception as erro:
 
         print(
-            "Erro mensagem inicial:",
-            e
+            "Erro ativação:",
+            erro
         )
 
-    # Loop infinito
+    # --------------------------------------------
+    # LOOP INFINITO
+    # --------------------------------------------
+
     while True:
 
         try:
 
-            await executar_ciclo(bot)
-
-        except Exception as e:
-
-            print(
-                "❌ Erro no ciclo:",
-                e
+            await executar_ciclo(
+                bot
             )
 
+        except Exception as erro:
+
+            print(
+                "❌ Erro geral:",
+                erro
+            )
+
+        horas = (
+            INTERVALO_CICLO
+            / 3600
+        )
+
         print(
-            f"😴 Aguardando "
-            f"{INTERVALO_CICLO // 3600} horas..."
+            f"😴 Próximo ciclo em "
+            f"{horas:.1f} horas."
         )
 
         await asyncio.sleep(
@@ -623,10 +1631,10 @@ async def bot_loop():
 
 
 # ============================================================
-# THREAD DO BOT
+# THREAD
 # ============================================================
 
-def start_bot():
+def iniciar_bot():
 
     try:
 
@@ -634,30 +1642,33 @@ def start_bot():
             bot_loop()
         )
 
-    except Exception as e:
+    except Exception as erro:
 
         print(
-            "Erro fatal no bot:",
-            e
+            "❌ Erro fatal:",
+            erro
         )
 
 
 # ============================================================
-# SERVIDOR FLASK
+# WEB
 # ============================================================
 
-def run_web():
+def iniciar_web():
 
-    port = int(
+    porta = int(
         os.environ.get(
             "PORT",
-            10000
+            "10000"
         )
     )
 
     app.run(
+
         host="0.0.0.0",
-        port=port
+
+        port=porta
+
     )
 
 
@@ -668,10 +1679,13 @@ def run_web():
 if __name__ == "__main__":
 
     thread = threading.Thread(
-        target=start_bot,
+
+        target=iniciar_bot,
+
         daemon=True
+
     )
 
     thread.start()
 
-    run_web()
+    iniciar_web()
