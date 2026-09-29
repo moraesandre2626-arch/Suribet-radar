@@ -1,9 +1,9 @@
 import os
-import time
-import json
 import re
-import asyncio
+import json
+import time
 import threading
+import traceback
 import statistics
 import unicodedata
 from urllib.parse import quote, urljoin, urlparse, parse_qsl, urlencode, urlunparse
@@ -11,14 +11,18 @@ from urllib.parse import quote, urljoin, urlparse, parse_qsl, urlencode, urlunpa
 import requests
 from flask import Flask
 from bs4 import BeautifulSoup
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 
 # ============================================================
-# PRICE RADAR V6
+# PRICE RADAR V6.1
 #
-# RADAR POR MARCA
-# Apple + Samsung + Motorola + Xiaomi
+# RADAR DE CELULARES POR MARCA
+#
+# MARCAS:
+# Apple
+# Samsung
+# Motorola
+# Xiaomi
 #
 # LOJAS:
 # Amazon
@@ -31,6 +35,16 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 # REGRA:
 # Só alerta quando o preço encontrado estiver pelo menos
 # 20% abaixo da referência dos preços comparáveis.
+#
+# V6.1:
+# - Inicialização mais segura para Render
+# - Logs detalhados
+# - Telegram via API HTTP
+# - Sem dependência do python-telegram-bot
+# - Histórico
+# - Anti-spam
+# - Comparação por modelo + armazenamento
+# - Botões clicáveis
 # ============================================================
 
 
@@ -46,20 +60,22 @@ TELEGRAM_TOKEN = (
 
 CHAT_ID = os.getenv("CHAT_ID")
 
-# Amazon
+
+# ============================================================
+# AFILIADOS
+# ============================================================
+
 TAG_AMAZON = (
     os.getenv("TAG_AMAZON")
     or os.getenv("TAG_AM")
     or "suribet06-20"
 )
 
-# Mercado Livre
 ML_AFILIADO = (
     os.getenv("ML_AFILIADO")
     or "https://meli.la/19nLNPe"
 )
 
-# Shopee
 SHOPEE_AFILIADO = (
     os.getenv("SHOPEE_AFILIADO")
     or "https://s.shopee.com.br/1BMi2RMcej"
@@ -70,29 +86,33 @@ SHOPEE_VITRINE = (
     or "https://collshp.com/shops2023?view=storefront"
 )
 
-# Intervalo entre varreduras
+
+# ============================================================
+# RADAR
+# ============================================================
+
 INTERVALO_CICLO = int(
     os.getenv("INTERVALO_CICLO")
     or "7200"
 )
 
-# Percentual mínimo da oportunidade
 DESCONTO_MINIMO = float(
     os.getenv("DESCONTO_MINIMO")
     or "20"
 )
 
-# Quantos resultados tentar analisar por loja/marca
 MAX_RESULTADOS_POR_LOJA = int(
     os.getenv("MAX_RESULTADOS_POR_LOJA")
     or "12"
 )
 
-# Histórico
-ARQUIVO_HISTORICO = "historico_precos_v6.json"
 
-# Memória anti-spam
-ARQUIVO_ALERTAS = "alertas_v6.json"
+# ============================================================
+# ARQUIVOS
+# ============================================================
+
+ARQUIVO_HISTORICO = "historico_precos_v61.json"
+ARQUIVO_ALERTAS = "alertas_v61.json"
 
 
 # ============================================================
@@ -108,7 +128,21 @@ MARCAS = [
 
 
 # ============================================================
-# TERMOS PARA GARANTIR QUE SEJA CELULAR
+# LOJAS
+# ============================================================
+
+LOJAS = [
+    "Amazon",
+    "Mercado Livre",
+    "Shopee",
+    "Magazine Luiza",
+    "Casas Bahia",
+    "KaBuM"
+]
+
+
+# ============================================================
+# TERMOS DE CELULAR
 # ============================================================
 
 TERMOS_CELULAR = [
@@ -145,7 +179,6 @@ TERMOS_IGNORAR = [
     "display",
     "tela",
     "vidro",
-    "película",
     "adaptador",
     "controle",
     "smartwatch",
@@ -155,7 +188,8 @@ TERMOS_IGNORAR = [
     "notebook",
     "computador",
     "mouse",
-    "teclado"
+    "teclado",
+    "pelicula"
 ]
 
 
@@ -175,12 +209,21 @@ HEADERS = {
         "text/html,application/xhtml+xml,"
         "application/xml;q=0.9,image/avif,"
         "image/webp,*/*;q=0.8"
-    )
+    ),
+    "Cache-Control": "no-cache"
 }
 
 
 # ============================================================
-# FLASK / RENDER
+# SESSION
+# ============================================================
+
+SESSION = requests.Session()
+SESSION.headers.update(HEADERS)
+
+
+# ============================================================
+# FLASK
 # ============================================================
 
 app = Flask(__name__)
@@ -188,15 +231,16 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "PRICE RADAR V6 ONLINE"
+    return "PRICE RADAR V6.1 ONLINE"
 
 
 @app.route("/health")
 def health():
     return {
         "status": "online",
-        "bot": "Price Radar V6",
+        "bot": "Price Radar V6.1",
         "marcas": MARCAS,
+        "lojas": LOJAS,
         "desconto_minimo": DESCONTO_MINIMO
     }
 
@@ -205,23 +249,27 @@ def health():
 def status():
     return {
         "radar": "ONLINE",
-        "versao": "V6",
+        "versao": "V6.1",
         "marcas": MARCAS,
-        "lojas": [
-            "Amazon",
-            "Mercado Livre",
-            "Shopee",
-            "Magazine Luiza",
-            "Casas Bahia",
-            "KaBuM"
-        ],
+        "lojas": LOJAS,
         "desconto_minimo": f"{DESCONTO_MINIMO}%",
         "intervalo_segundos": INTERVALO_CICLO
     }
 
 
 # ============================================================
-# HISTÓRICO
+# LOG
+# ============================================================
+
+def log(msg):
+    print(
+        f"[PRICE RADAR] {msg}",
+        flush=True
+    )
+
+
+# ============================================================
+# JSON
 # ============================================================
 
 def carregar_json(caminho):
@@ -237,13 +285,17 @@ def carregar_json(caminho):
             encoding="utf-8"
         ) as arquivo:
 
-            return json.load(arquivo)
+            dados = json.load(arquivo)
+
+            if isinstance(dados, dict):
+                return dados
+
+            return {}
 
     except Exception as erro:
 
-        print(
-            f"Erro ao carregar {caminho}:",
-            erro
+        log(
+            f"Erro carregando {caminho}: {erro}"
         )
 
         return {}
@@ -253,60 +305,10 @@ def salvar_json(caminho, dados):
 
     try:
 
+        temporario = caminho + ".tmp"
+
         with open(
-            caminho,
+            temporario,
             "w",
             encoding="utf-8"
-        ) as arquivo:
-
-            json.dump(
-                dados,
-                arquivo,
-                ensure_ascii=False,
-                indent=2
-            )
-
-    except Exception as erro:
-
-        print(
-            f"Erro ao salvar {caminho}:",
-            erro
-        )
-
-
-def carregar_historico():
-    return carregar_json(
-        ARQUIVO_HISTORICO
-    )
-
-
-def salvar_historico(historico):
-    salvar_json(
-        ARQUIVO_HISTORICO,
-        historico
-    )
-
-
-def carregar_alertas():
-    return carregar_json(
-        ARQUIVO_ALERTAS
-    )
-
-
-def salvar_alertas(alertas):
-    salvar_json(
-        ARQUIVO_ALERTAS,
-        alertas
-    )
-
-
-# ============================================================
-# TEXTO
-# ============================================================
-
-def normalizar_texto(texto):
-
-    if not texto:
-        return ""
-
-   
+       
