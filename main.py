@@ -6,7 +6,7 @@ import threading
 import traceback
 import statistics
 import unicodedata
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, urljoin, urlparse, parse_qs, urlencode, urlunparse
 
 import requests
 from flask import Flask
@@ -14,16 +14,40 @@ from bs4 import BeautifulSoup
 
 
 # ============================================================
-# PRICE RADAR V6.1
-# Celulares por MARCA
-# Amazon + Mercado Livre + Shopee + Magalu + Casas Bahia + KaBuM
-# Alerta somente quando preço <= 80% da referência comparável
-# Telegram via Bot API HTTP
+# PRICE RADAR V6.2
+#
+# CELULARES POR MARCA
+#
+# Amazon
+# Mercado Livre
+# Shopee
+# Magazine Luiza
+# Casas Bahia
+# KaBuM
+#
+# NOVO:
+# - Link direto do produto
+# - Foto do produto
+# - Telegram envia foto + oferta
+# - Botão abre o produto encontrado
+# - Amazon recebe tag de afiliado
+# - Fallback para mensagem sem foto
 # ============================================================
 
-APP_VERSION = "PRICE RADAR V6.1"
 
-PORT = int(os.getenv("PORT", "10000"))
+APP_VERSION = "PRICE RADAR V6.2"
+
+PORT = int(
+    os.getenv(
+        "PORT",
+        "10000"
+    )
+)
+
+
+# ============================================================
+# TELEGRAM
+# ============================================================
 
 TELEGRAM_TOKEN = (
     os.getenv("TELEGRAM_BOT_TOKEN")
@@ -32,6 +56,11 @@ TELEGRAM_TOKEN = (
 )
 
 CHAT_ID = os.getenv("CHAT_ID")
+
+
+# ============================================================
+# AFILIADOS
+# ============================================================
 
 TAG_AMAZON = (
     os.getenv("TAG_AMAZON")
@@ -54,47 +83,91 @@ SHOPEE_VITRINE = (
     or "https://collshp.com/shops2023?view=storefront"
 )
 
+
+# ============================================================
+# CONFIGURAÇÕES
+# ============================================================
+
 INTERVALO_CICLO = int(
-    os.getenv("INTERVALO_CICLO", "7200")
+    os.getenv(
+        "INTERVALO_CICLO",
+        "7200"
+    )
 )
 
 DESCONTO_MINIMO = float(
-    os.getenv("DESCONTO_MINIMO", "0.20")
+    os.getenv(
+        "DESCONTO_MINIMO",
+        "0.20"
+    )
 )
 
 TIMEOUT = int(
-    os.getenv("REQUEST_TIMEOUT", "20")
+    os.getenv(
+        "REQUEST_TIMEOUT",
+        "20"
+    )
 )
 
-ARQUIVO_HISTORICO = "historico_precos.json"
-ARQUIVO_ALERTAS = "alertas_enviados.json"
+ARQUIVO_HISTORICO = (
+    "historico_precos.json"
+)
+
+ARQUIVO_ALERTAS = (
+    "alertas_enviados.json"
+)
+
+
+# ============================================================
+# HEADERS
+# ============================================================
 
 HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/140.0 Safari/537.36"
+        "Mozilla/5.0 "
+        "(Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
+        "Chrome/140.0.0.0 "
+        "Safari/537.36"
     ),
-    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+    "Accept": (
+        "text/html,application/xhtml+xml,"
+        "application/xml;q=0.9,image/avif,"
+        "image/webp,*/*;q=0.8"
+    ),
+    "Accept-Language": (
+        "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
+    ),
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
 }
 
 
+# ============================================================
+# MARCAS
+# ============================================================
+
 MARCAS = {
+
     "Samsung": [
         "Samsung Galaxy A",
         "Samsung Galaxy S",
         "Samsung Galaxy M",
         "Samsung Galaxy Z",
     ],
+
     "Motorola": [
         "Motorola Moto G",
         "Motorola Moto E",
         "Motorola Edge",
         "Motorola Razr",
     ],
+
     "Apple": [
         "Apple iPhone",
     ],
+
     "Xiaomi": [
         "Xiaomi Redmi",
         "Xiaomi Poco",
@@ -106,6 +179,10 @@ MARCAS = {
 }
 
 
+# ============================================================
+# LOJAS
+# ============================================================
+
 LOJAS = [
     "Amazon",
     "Mercado Livre",
@@ -116,7 +193,12 @@ LOJAS = [
 ]
 
 
+# ============================================================
+# FLASK
+# ============================================================
+
 app = Flask(__name__)
+
 
 ULTIMO_CICLO = {
     "inicio": None,
@@ -127,6 +209,7 @@ ULTIMO_CICLO = {
     "erro": None,
 }
 
+
 LOCK = threading.Lock()
 
 
@@ -135,6 +218,7 @@ LOCK = threading.Lock()
 # ============================================================
 
 def log(mensagem):
+
     print(
         f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
         f"{mensagem}",
@@ -146,9 +230,16 @@ def log(mensagem):
 # JSON
 # ============================================================
 
-def carregar_json(caminho, padrao):
+def carregar_json(
+    caminho,
+    padrao,
+):
+
     try:
-        if not os.path.exists(caminho):
+
+        if not os.path.exists(
+            caminho
+        ):
             return padrao
 
         with open(
@@ -156,22 +247,37 @@ def carregar_json(caminho, padrao):
             "r",
             encoding="utf-8",
         ) as arquivo:
-            return json.load(arquivo)
+
+            return json.load(
+                arquivo
+            )
 
     except Exception as erro:
-        log(f"Erro lendo {caminho}: {erro}")
+
+        log(
+            f"Erro lendo {caminho}: {erro}"
+        )
+
         return padrao
 
 
-def salvar_json(caminho, dados):
+def salvar_json(
+    caminho,
+    dados,
+):
+
     try:
-        temporario = caminho + ".tmp"
+
+        temporario = (
+            caminho + ".tmp"
+        )
 
         with open(
             temporario,
             "w",
             encoding="utf-8",
         ) as arquivo:
+
             json.dump(
                 dados,
                 arquivo,
@@ -185,17 +291,23 @@ def salvar_json(caminho, dados):
         )
 
     except Exception as erro:
+
         log(
             f"Erro salvando {caminho}: {erro}"
         )
 
 
 # ============================================================
-# TEXTO / PREÇO
+# TEXTO
 # ============================================================
 
-def normalizar_texto(texto):
-    texto = str(texto or "")
+def normalizar_texto(
+    texto
+):
+
+    texto = str(
+        texto or ""
+    )
 
     texto = unicodedata.normalize(
         "NFKD",
@@ -203,7 +315,8 @@ def normalizar_texto(texto):
     )
 
     texto = "".join(
-        c for c in texto
+        c
+        for c in texto
         if not unicodedata.combining(c)
     )
 
@@ -218,11 +331,20 @@ def normalizar_texto(texto):
     return texto
 
 
-def converter_preco(valor):
+# ============================================================
+# PREÇO
+# ============================================================
+
+def converter_preco(
+    valor
+):
+
     if valor is None:
         return None
 
-    texto = str(valor).strip()
+    texto = str(
+        valor
+    ).strip()
 
     texto = texto.replace(
         "\xa0",
@@ -230,12 +352,18 @@ def converter_preco(valor):
     )
 
     padroes = [
+
         r"R\$\s*([\d.]+,\d{2})",
+
         r"R\$\s*([\d]+,\d{2})",
-        r"(?<!\d)([\d.]+,\d{2})(?!\d)",
+
+        r"(?<!\d)"
+        r"([\d.]+,\d{2})"
+        r"(?!\d)",
     ]
 
     for padrao in padroes:
+
         resultado = re.search(
             padrao,
             texto,
@@ -245,20 +373,33 @@ def converter_preco(valor):
         if not resultado:
             continue
 
-        numero = resultado.group(1)
+        numero = resultado.group(
+            1
+        )
 
-        numero = numero.replace(
-            ".",
-            "",
-        ).replace(
-            ",",
-            ".",
+        numero = (
+            numero
+            .replace(
+                ".",
+                "",
+            )
+            .replace(
+                ",",
+                ".",
+            )
         )
 
         try:
-            preco = float(numero)
 
-            if 100 <= preco <= 100000:
+            preco = float(
+                numero
+            )
+
+            if (
+                100
+                <= preco
+                <= 100000
+            ):
                 return preco
 
         except ValueError:
@@ -267,67 +408,114 @@ def converter_preco(valor):
     return None
 
 
-def moeda(valor):
+def moeda(
+    valor
+):
+
     if valor is None:
         return "N/D"
 
     texto = f"{valor:,.2f}"
 
-    texto = texto.replace(
-        ",",
-        "X",
-    ).replace(
-        ".",
-        ",",
-    ).replace(
-        "X",
-        ".",
+    texto = (
+        texto
+        .replace(
+            ",",
+            "X",
+        )
+        .replace(
+            ".",
+            ",",
+        )
+        .replace(
+            "X",
+            ".",
+        )
     )
 
-    return f"R$ {texto}"
+    return (
+        f"R$ {texto}"
+    )
 
 
 # ============================================================
-# NORMALIZAÇÃO DO MODELO
+# CAPACIDADE
 # ============================================================
 
-def extrair_capacidade(texto):
-    texto = normalizar_texto(texto)
+def extrair_capacidade(
+    texto
+):
+
+    texto = normalizar_texto(
+        texto
+    )
 
     encontrados = re.findall(
-        r"(?<!\d)(32|64|128|256|512|1024)\s*gb\b",
+        r"(?<!\d)"
+        r"(32|64|128|256|512|1024)"
+        r"\s*gb\b",
         texto,
     )
 
     if encontrados:
-        return f"{encontrados[0]}GB"
+
+        return (
+            f"{encontrados[0]}GB"
+        )
 
     encontrados_tb = re.findall(
-        r"(?<!\d)(1|2)\s*tb\b",
+        r"(?<!\d)"
+        r"(1|2)"
+        r"\s*tb\b",
         texto,
     )
 
     if encontrados_tb:
-        return f"{encontrados_tb[0]}TB"
+
+        return (
+            f"{encontrados_tb[0]}TB"
+        )
 
     return ""
 
 
-def normalizar_modelo(titulo):
-    texto = normalizar_texto(titulo)
+# ============================================================
+# MODELO
+# ============================================================
 
-    capacidade = extrair_capacidade(texto)
+def normalizar_modelo(
+    titulo
+):
+
+    texto = normalizar_texto(
+        titulo
+    )
+
+    capacidade = (
+        extrair_capacidade(
+            texto
+        )
+    )
 
     modelo = ""
 
-    # Apple
+
+    # --------------------------------------------------------
+    # APPLE
+    # --------------------------------------------------------
+
     match = re.search(
-        r"\biphone\s*(\d{1,2}(?:\s*(?:pro max|pro|plus|mini|e))?)",
+        r"\biphone\s*"
+        r"(\d{1,2}"
+        r"(?:\s*"
+        r"(?:pro max|pro|plus|mini|e)"
+        r")?)",
         texto,
         flags=re.I,
     )
 
     if match:
+
         modelo = (
             "iPhone "
             + re.sub(
@@ -337,17 +525,25 @@ def normalizar_modelo(titulo):
             ).strip()
         )
 
-    # Samsung
+
+    # --------------------------------------------------------
+    # SAMSUNG
+    # --------------------------------------------------------
+
     if not modelo:
+
         match = re.search(
             r"\bgalaxy\s+"
             r"([asmzf]\s*\d{1,3}"
-            r"(?:\s*(?:5g|4g|fe|ultra|plus|\+))*)",
+            r"(?:\s*"
+            r"(?:5g|4g|fe|ultra|plus|\+)"
+            r")*)",
             texto,
             flags=re.I,
         )
 
         if match:
+
             modelo = (
                 "Galaxy "
                 + re.sub(
@@ -357,8 +553,13 @@ def normalizar_modelo(titulo):
                 ).strip()
             )
 
-    # Motorola
+
+    # --------------------------------------------------------
+    # MOTOROLA
+    # --------------------------------------------------------
+
     if not modelo:
+
         match = re.search(
             r"\b("
             r"moto\s+[a-z]?\s*\d{1,3}"
@@ -370,14 +571,20 @@ def normalizar_modelo(titulo):
         )
 
         if match:
+
             modelo = re.sub(
                 r"\s+",
                 " ",
                 match.group(1),
             ).strip().title()
 
-    # Xiaomi / Redmi / Poco
+
+    # --------------------------------------------------------
+    # XIAOMI
+    # --------------------------------------------------------
+
     if not modelo:
+
         match = re.search(
             r"\b("
             r"redmi\s+note\s+\d+[a-z]*"
@@ -390,23 +597,45 @@ def normalizar_modelo(titulo):
         )
 
         if match:
+
             modelo = re.sub(
                 r"\s+",
                 " ",
                 match.group(1),
             ).strip().title()
 
+
+    # --------------------------------------------------------
+    # FALLBACK
+    # --------------------------------------------------------
+
     if not modelo:
-        modelo = normalizar_texto(titulo)
+
+        modelo = normalizar_texto(
+            titulo
+        )
 
     if capacidade:
-        return f"{modelo} {capacidade}".strip()
+
+        return (
+            f"{modelo} "
+            f"{capacidade}"
+        ).strip()
 
     return modelo.strip()
 
 
-def detectar_marca(titulo):
-    texto = normalizar_texto(titulo)
+# ============================================================
+# MARCA
+# ============================================================
+
+def detectar_marca(
+    titulo
+):
+
+    texto = normalizar_texto(
+        titulo
+    )
 
     if "iphone" in texto:
         return "Apple"
@@ -439,29 +668,42 @@ def detectar_marca(titulo):
 # URLS DE PESQUISA
 # ============================================================
 
-def url_amazon(busca):
+def url_amazon(
+    busca
+):
+
     return (
         "https://www.amazon.com.br/s?k="
         + quote(busca)
-        + f"&tag={quote(TAG_AMAZON)}"
+        + "&tag="
+        + quote(TAG_AMAZON)
     )
 
 
-def url_ml(busca):
+def url_ml(
+    busca
+):
+
     return (
         "https://lista.mercadolivre.com.br/"
         + quote(busca)
     )
 
 
-def url_shopee(busca):
+def url_shopee(
+    busca
+):
+
     return (
         "https://shopee.com.br/search?keyword="
         + quote(busca)
     )
 
 
-def url_magalu(busca):
+def url_magalu(
+    busca
+):
+
     return (
         "https://www.magazineluiza.com.br/"
         "?s="
@@ -469,7 +711,10 @@ def url_magalu(busca):
     )
 
 
-def url_casas_bahia(busca):
+def url_casas_bahia(
+    busca
+):
+
     return (
         "https://www.casasbahia.com.br/"
         "busca/"
@@ -477,7 +722,10 @@ def url_casas_bahia(busca):
     )
 
 
-def url_kabum(busca):
+def url_kabum(
+    busca
+):
+
     return (
         "https://www.kabum.com.br/"
         "busca/"
@@ -486,34 +734,278 @@ def url_kabum(busca):
 
 
 # ============================================================
-# HTTP
+# URL
 # ============================================================
 
-def requisitar(url):
-    try:
-        resposta = requests.get(
-            url,
-            headers=HEADERS,
-            timeout=TIMEOUT,
+def link_valido(
+    url
+):
+
+    if not url:
+        return False
+
+    url = str(
+        url
+    ).strip()
+
+    return (
+        url.startswith(
+            "http://"
         )
-
-        if resposta.status_code != 200:
-            log(
-                f"HTTP {resposta.status_code}: {url}"
-            )
-            return None
-
-        return resposta.text
-
-    except Exception as erro:
-        log(
-            f"Erro HTTP {url}: {erro}"
+        or url.startswith(
+            "https://"
         )
+    )
+
+
+def limpar_url(
+    url
+):
+
+    if not link_valido(
+        url
+    ):
         return None
 
+    return str(
+        url
+    ).strip()
+
+
+def url_mesmo_dominio(
+    url,
+    dominios
+):
+
+    try:
+
+        host = urlparse(
+            url
+        ).netloc.lower()
+
+        return any(
+            dominio in host
+            for dominio in dominios
+        )
+
+    except Exception:
+        return False
+
 
 # ============================================================
-# RESULTADO PADRÃO
+# IMAGEM
+# ============================================================
+
+def imagem_valida(
+    url
+):
+
+    if not link_valido(
+        url
+    ):
+        return False
+
+    texto = url.lower()
+
+    if (
+        texto.startswith(
+            "data:"
+        )
+    ):
+        return False
+
+    if (
+        ".svg" in texto
+        or "logo" in texto
+        or "icon" in texto
+        or "sprite" in texto
+        or "avatar" in texto
+    ):
+        return False
+
+    return True
+
+
+def extrair_imagem_elemento(
+    elemento,
+    base_url
+):
+
+    if not elemento:
+        return None
+
+    atributos = [
+
+        "src",
+
+        "data-src",
+
+        "data-original",
+
+        "data-lazy-src",
+
+        "data-image",
+
+        "data-image-url",
+
+        "data-srcset",
+
+        "srcset",
+    ]
+
+    for atributo in atributos:
+
+        valor = elemento.get(
+            atributo
+        )
+
+        if not valor:
+            continue
+
+        # srcset pode conter várias URLs
+        if (
+            "srcset" in atributo
+            or "," in valor
+        ):
+
+            partes = [
+                p.strip()
+                for p in valor.split(",")
+                if p.strip()
+            ]
+
+            if partes:
+
+                valor = (
+                    partes[-1]
+                    .split(" ")[0]
+                )
+
+        valor = valor.strip()
+
+        if valor.startswith(
+            "//"
+        ):
+
+            valor = (
+                "https:"
+                + valor
+            )
+
+        url = urljoin(
+            base_url,
+            valor,
+        )
+
+        if imagem_valida(
+            url
+        ):
+            return url
+
+    return None
+
+
+def extrair_imagem_card(
+    bloco,
+    base_url
+):
+
+    if not bloco:
+        return None
+
+    # Primeiro procura imagens próximas
+    imagens = bloco.select(
+        "img"
+    )
+
+    for img in imagens:
+
+        url = extrair_imagem_elemento(
+            img,
+            base_url,
+        )
+
+        if url:
+            return url
+
+
+    # Depois procura elementos com background
+    elementos = bloco.select(
+        "[style*='background-image']"
+    )
+
+    for elemento in elementos:
+
+        style = elemento.get(
+            "style",
+            "",
+        )
+
+        match = re.search(
+            r"url\(['\"]?(.*?)['\"]?\)",
+            style,
+            flags=re.I,
+        )
+
+        if not match:
+            continue
+
+        url = urljoin(
+            base_url,
+            match.group(1),
+        )
+
+        if imagem_valida(
+            url
+        ):
+            return url
+
+    return None
+
+
+def extrair_og_image(
+    soup,
+    base_url
+):
+
+    if not soup:
+        return None
+
+    meta = soup.select_one(
+        'meta[property="og:image"]'
+    )
+
+    if not meta:
+
+        meta = soup.select_one(
+            'meta[name="twitter:image"]'
+        )
+
+    if not meta:
+        return None
+
+    valor = meta.get(
+        "content"
+    )
+
+    if not valor:
+        return None
+
+    url = urljoin(
+        base_url,
+        valor,
+    )
+
+    if imagem_valida(
+        url
+    ):
+        return url
+
+    return None
+
+
+# ============================================================
+# PRODUTO PADRÃO
 # ============================================================
 
 def criar_oferta(
@@ -521,41 +1013,343 @@ def criar_oferta(
     titulo,
     preco,
     url,
+    imagem=None,
 ):
-    if not titulo or preco is None:
+
+    if (
+        not titulo
+        or preco is None
+    ):
         return None
 
-    marca = detectar_marca(titulo)
+    marca = detectar_marca(
+        titulo
+    )
 
     if not marca:
         return None
 
-    modelo = normalizar_modelo(titulo)
+    modelo = normalizar_modelo(
+        titulo
+    )
 
     if not modelo:
         return None
 
     return {
+
         "loja": loja,
+
         "titulo": titulo.strip(),
+
         "marca": marca,
+
         "modelo": modelo,
+
         "preco": round(
             float(preco),
             2,
         ),
-        "url": url,
-        "timestamp": int(time.time()),
+
+        "url": limpar_url(
+            url
+        ),
+
+        "imagem": (
+            limpar_url(imagem)
+            if imagem
+            else None
+        ),
+
+        "timestamp": int(
+            time.time()
+        ),
     }
+
+
+# ============================================================
+# HTTP
+# ============================================================
+
+def requisitar(
+    url
+):
+
+    try:
+
+        resposta = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=TIMEOUT,
+            allow_redirects=True,
+        )
+
+        if resposta.status_code != 200:
+
+            log(
+                f"HTTP "
+                f"{resposta.status_code}: "
+                f"{url}"
+            )
+
+            return None
+
+        return resposta.text
+
+    except Exception as erro:
+
+        log(
+            f"Erro HTTP "
+            f"{url}: {erro}"
+        )
+
+        return None
+
+
+# ============================================================
+# LINK DIRETO DO PRODUTO
+# ============================================================
+
+def escolher_link_produto(
+    bloco,
+    loja,
+    url_base,
+):
+
+    if not bloco:
+        return None
+
+    candidatos = bloco.select(
+        "a[href]"
+    )
+
+    if not candidatos:
+        return None
+
+    bloqueados = [
+
+        "/login",
+
+        "/cadastro",
+
+        "/account",
+
+        "/conta",
+
+        "/ajuda",
+
+        "/atendimento",
+
+        "/busca",
+
+        "/search",
+
+        "/ofertas",
+
+        "/categoria",
+
+        "/categorias",
+
+        "/departamento",
+
+        "/departamentos",
+
+        "/home",
+
+        "/sair",
+
+        "javascript:",
+
+        "#",
+    ]
+
+    candidatos_avaliados = []
+
+
+    for a in candidatos:
+
+        href = (
+            a.get(
+                "href",
+                ""
+            )
+            .strip()
+        )
+
+        if not href:
+            continue
+
+        href_lower = (
+            href.lower()
+        )
+
+        if any(
+            item in href_lower
+            for item in bloqueados
+        ):
+            continue
+
+        link = urljoin(
+            url_base,
+            href,
+        )
+
+        if not link_valido(
+            link
+        ):
+            continue
+
+        texto = a.get_text(
+            " ",
+            strip=True,
+        )
+
+        score = 0
+
+
+        # ----------------------------------------------------
+        # TEXTO
+        # ----------------------------------------------------
+
+        if len(texto) >= 15:
+            score += 2
+
+        if len(texto) >= 30:
+            score += 1
+
+
+        # ----------------------------------------------------
+        # LOJAS
+        # ----------------------------------------------------
+
+        if loja == "Amazon":
+
+            if (
+                "/dp/"
+                in link.lower()
+            ):
+                score += 20
+
+            if (
+                "/gp/product/"
+                in link.lower()
+            ):
+                score += 20
+
+
+        elif loja == "Mercado Livre":
+
+            if (
+                "/mlb-"
+                in link.lower()
+            ):
+                score += 20
+
+            if (
+                "produto.mercadolivre"
+                in link.lower()
+            ):
+                score += 15
+
+
+        elif loja == "Shopee":
+
+            if (
+                "/product/"
+                in link.lower()
+            ):
+                score += 20
+
+            if (
+                "/universal-link/"
+                in link.lower()
+            ):
+                score += 10
+
+
+        elif loja == "Magazine Luiza":
+
+            if (
+                "/p/"
+                in link.lower()
+            ):
+                score += 20
+
+            if (
+                "/produto/"
+                in link.lower()
+            ):
+                score += 15
+
+
+        elif loja == "Casas Bahia":
+
+            if (
+                "/p/"
+                in link.lower()
+            ):
+                score += 20
+
+            if (
+                "/produto/"
+                in link.lower()
+            ):
+                score += 15
+
+
+        elif loja == "KaBuM":
+
+            if (
+                "/produto/"
+                in link.lower()
+            ):
+                score += 20
+
+
+        # ----------------------------------------------------
+        # URL LONGA
+        # ----------------------------------------------------
+
+        if len(link) > 60:
+            score += 1
+
+
+        candidatos_avaliados.append(
+            (
+                score,
+                link,
+            )
+        )
+
+
+    if not candidatos_avaliados:
+        return None
+
+
+    candidatos_avaliados.sort(
+        key=lambda x: x[0],
+        reverse=True,
+    )
+
+
+    return candidatos_avaliados[0][1]
 
 
 # ============================================================
 # AMAZON
 # ============================================================
 
-def buscar_amazon(busca):
-    url = url_amazon(busca)
-    html = requisitar(url)
+def buscar_amazon(
+    busca
+):
+
+    url = url_amazon(
+        busca
+    )
+
+    html = requisitar(
+        url
+    )
 
     if not html:
         return []
@@ -567,10 +1361,16 @@ def buscar_amazon(busca):
 
     ofertas = []
 
-    for item in soup.select(
+
+    itens = soup.select(
         '[data-component-type="s-search-result"]'
-    ):
+    )
+
+
+    for item in itens:
+
         try:
+
             titulo_el = item.select_one(
                 "h2 span"
             )
@@ -588,13 +1388,23 @@ def buscar_amazon(busca):
                 "h2 a"
             )
 
-            if not titulo_el or not preco_el:
+            imagem_el = item.select_one(
+                "img.s-image"
+            )
+
+            if (
+                not titulo_el
+                or not preco_el
+                or not link_el
+            ):
                 continue
+
 
             titulo = titulo_el.get_text(
                 " ",
                 strip=True,
             )
+
 
             preco = converter_preco(
                 preco_el.get_text(
@@ -603,7 +1413,9 @@ def buscar_amazon(busca):
                 )
             )
 
+
             if preco is None:
+
                 preco = converter_preco(
                     item.get_text(
                         " ",
@@ -611,29 +1423,58 @@ def buscar_amazon(busca):
                     )
                 )
 
-            link = None
 
-            if link_el and link_el.get("href"):
-                link = urljoin(
+            href = link_el.get(
+                "href",
+                "",
+            )
+
+            if not href:
+                continue
+
+
+            link = urljoin(
+                "https://www.amazon.com.br",
+                href,
+            )
+
+
+            if not link_valido(
+                link
+            ):
+                continue
+
+
+            imagem = (
+                extrair_imagem_elemento(
+                    imagem_el,
                     "https://www.amazon.com.br",
-                    link_el["href"],
                 )
+                if imagem_el
+                else None
+            )
 
-            if not link:
-                link = url
 
             oferta = criar_oferta(
                 "Amazon",
                 titulo,
                 preco,
                 link,
+                imagem,
             )
 
+
             if oferta:
-                ofertas.append(oferta)
+
+                ofertas.append(
+                    oferta
+                )
+
 
         except Exception:
+
             continue
+
 
     return ofertas
 
@@ -642,9 +1483,17 @@ def buscar_amazon(busca):
 # MERCADO LIVRE
 # ============================================================
 
-def buscar_ml(busca):
-    url = url_ml(busca)
-    html = requisitar(url)
+def buscar_ml(
+    busca
+):
+
+    url = url_ml(
+        busca
+    )
+
+    html = requisitar(
+        url
+    )
 
     if not html:
         return []
@@ -656,50 +1505,60 @@ def buscar_ml(busca):
 
     ofertas = []
 
+
     itens = soup.select(
         "li.ui-search-layout__item"
     )
 
+
     for item in itens:
+
         try:
+
             titulo_el = (
+
                 item.select_one(
                     "a.poly-component__title"
                 )
+
                 or item.select_one(
                     ".ui-search-item__title"
                 )
+
                 or item.select_one(
                     "h2"
                 )
             )
 
+
             preco_el = (
+
                 item.select_one(
                     ".andes-money-amount__fraction"
                 )
+
                 or item.select_one(
-                    ".ui-search-price__part .andes-money-amount__fraction"
+                    ".ui-search-price__part "
+                    ".andes-money-amount__fraction"
                 )
             )
 
-            link_el = (
-                item.select_one(
-                    "a[href]"
-                )
-            )
 
             if not titulo_el:
                 continue
+
 
             titulo = titulo_el.get_text(
                 " ",
                 strip=True,
             )
 
+
             preco = None
 
+
             if preco_el:
+
                 preco = converter_preco(
                     preco_el.get_text(
                         " ",
@@ -707,7 +1566,9 @@ def buscar_ml(busca):
                     )
                 )
 
+
             if preco is None:
+
                 preco = converter_preco(
                     item.get_text(
                         " ",
@@ -715,24 +1576,44 @@ def buscar_ml(busca):
                     )
                 )
 
-            link = (
-                link_el.get("href")
-                if link_el
-                else url
+
+            link = escolher_link_produto(
+                item,
+                "Mercado Livre",
+                "https://lista.mercadolivre.com.br",
             )
+
+
+            if not link:
+                continue
+
+
+            imagem = extrair_imagem_card(
+                item,
+                "https://lista.mercadolivre.com.br",
+            )
+
 
             oferta = criar_oferta(
                 "Mercado Livre",
                 titulo,
                 preco,
                 link,
+                imagem,
             )
 
+
             if oferta:
-                ofertas.append(oferta)
+
+                ofertas.append(
+                    oferta
+                )
+
 
         except Exception:
+
             continue
+
 
     return ofertas
 
@@ -741,9 +1622,17 @@ def buscar_ml(busca):
 # SHOPEE
 # ============================================================
 
-def buscar_shopee(busca):
-    url = url_shopee(busca)
-    html = requisitar(url)
+def buscar_shopee(
+    busca
+):
+
+    url = url_shopee(
+        busca
+    )
+
+    html = requisitar(
+        url
+    )
 
     if not html:
         return []
@@ -755,53 +1644,119 @@ def buscar_shopee(busca):
 
     ofertas = []
 
-    for link_el in soup.select(
-        "a[href]"
-    ):
-        try:
-            href = link_el.get("href", "")
 
-            texto = link_el.get_text(
-                " ",
-                strip=True,
+    # --------------------------------------------------------
+    # PRIMEIRA TENTATIVA:
+    # cards com links
+    # --------------------------------------------------------
+
+    links = soup.select(
+        "a[href]"
+    )
+
+
+    vistos = set()
+
+
+    for link_el in links:
+
+        try:
+
+            href = link_el.get(
+                "href",
+                "",
             )
 
-            if len(texto) < 8:
+            if not href:
                 continue
 
-            if "R$" not in texto:
-                continue
-
-            preco = converter_preco(texto)
-
-            if preco is None:
-                continue
-
-            titulo = texto
-
-            if len(titulo) > 220:
-                titulo = titulo[:220]
-
-            if not detectar_marca(titulo):
-                continue
 
             link = urljoin(
                 "https://shopee.com.br",
                 href,
             )
 
+
+            if (
+                "/product/"
+                not in link.lower()
+                and "/universal-link/"
+                not in link.lower()
+            ):
+                continue
+
+
+            texto = link_el.get_text(
+                " ",
+                strip=True,
+            )
+
+
+            if len(texto) < 8:
+                continue
+
+
+            preco = converter_preco(
+                texto
+            )
+
+
+            if preco is None:
+
+                continue
+
+
+            if not detectar_marca(
+                texto
+            ):
+                continue
+
+
+            chave = (
+                link
+                + "|"
+                + texto[:100]
+            )
+
+
+            if chave in vistos:
+                continue
+
+
+            vistos.add(
+                chave
+            )
+
+
+            imagem = extrair_imagem_card(
+                link_el,
+                "https://shopee.com.br",
+            )
+
+
+            titulo = texto[:220]
+
+
             oferta = criar_oferta(
                 "Shopee",
                 titulo,
                 preco,
                 link,
+                imagem,
             )
 
+
             if oferta:
-                ofertas.append(oferta)
+
+                ofertas.append(
+                    oferta
+                )
+
 
         except Exception:
+
             continue
+
 
     return ofertas
 
@@ -815,7 +1770,10 @@ def buscar_loja_generica(
     busca,
     url,
 ):
-    html = requisitar(url)
+
+    html = requisitar(
+        url
+    )
 
     if not html:
         return []
@@ -827,120 +1785,203 @@ def buscar_loja_generica(
 
     ofertas = []
 
+
     candidatos = soup.select(
         "article, li, div"
     )
 
+
     limite = 500
 
+
     for bloco in candidatos:
+
         if len(ofertas) >= limite:
             break
 
+
         try:
+
             texto = bloco.get_text(
                 " ",
                 strip=True,
             )
 
+
             if not texto:
                 continue
+
 
             if "R$" not in texto:
                 continue
 
+
             if len(texto) < 20:
                 continue
+
 
             if len(texto) > 1000:
                 continue
 
-            if not detectar_marca(texto):
+
+            if not detectar_marca(
+                texto
+            ):
                 continue
 
-            preco = converter_preco(texto)
+
+            preco = converter_preco(
+                texto
+            )
+
 
             if preco is None:
                 continue
 
-            if preco < 200 or preco > 100000:
+
+            if (
+                preco < 200
+                or preco > 100000
+            ):
                 continue
 
-            link_el = bloco.select_one(
-                "a[href]"
+
+            link = escolher_link_produto(
+                bloco,
+                loja,
+                url,
             )
 
-            if link_el:
-                link = urljoin(
-                    url,
-                    link_el.get("href"),
-                )
-            else:
-                link = url
 
-            titulo = texto[:300]
+            if not link:
+                continue
+
+
+            imagem = extrair_imagem_card(
+                bloco,
+                url,
+            )
+
+
+            titulo_el = (
+
+                bloco.select_one(
+                    "h1"
+                )
+
+                or bloco.select_one(
+                    "h2"
+                )
+
+                or bloco.select_one(
+                    "h3"
+                )
+
+                or bloco.select_one(
+                    "[class*='title']"
+                )
+
+                or bloco.select_one(
+                    "[class*='name']"
+                )
+            )
+
+
+            if titulo_el:
+
+                titulo = titulo_el.get_text(
+                    " ",
+                    strip=True,
+                )
+
+            else:
+
+                titulo = texto[:300]
+
 
             oferta = criar_oferta(
                 loja,
                 titulo,
                 preco,
                 link,
+                imagem,
             )
 
+
             if oferta:
-                ofertas.append(oferta)
+
+                ofertas.append(
+                    oferta
+                )
+
 
         except Exception:
+
             continue
+
 
     return ofertas
 
 
 # ============================================================
-# BUSCA POR MARCA
+# BUSCAR TODAS AS LOJAS
 # ============================================================
 
 def buscar_todas_as_lojas():
+
     ofertas = []
 
+
     for marca, buscas in MARCAS.items():
+
         for busca in buscas:
+
             log(
                 f"Buscando: {busca}"
             )
 
+
             funcoes = [
+
                 (
                     "Amazon",
                     buscar_amazon,
                 ),
+
                 (
                     "Mercado Livre",
                     buscar_ml,
                 ),
+
                 (
                     "Shopee",
                     buscar_shopee,
                 ),
+
                 (
                     "Magazine Luiza",
-                    lambda q: buscar_loja_generica(
+                    lambda q:
+                    buscar_loja_generica(
                         "Magazine Luiza",
                         q,
                         url_magalu(q),
                     ),
                 ),
+
                 (
                     "Casas Bahia",
-                    lambda q: buscar_loja_generica(
+                    lambda q:
+                    buscar_loja_generica(
                         "Casas Bahia",
                         q,
                         url_casas_bahia(q),
                     ),
                 ),
+
                 (
                     "KaBuM",
-                    lambda q: buscar_loja_generica(
+                    lambda q:
+                    buscar_loja_generica(
                         "KaBuM",
                         q,
                         url_kabum(q),
@@ -948,26 +1989,37 @@ def buscar_todas_as_lojas():
                 ),
             ]
 
+
             for loja, funcao in funcoes:
+
                 try:
+
                     encontrados = funcao(
                         busca
                     )
 
+
                     if encontrados:
+
                         log(
                             f"{loja}: "
-                            f"{len(encontrados)} ofertas"
+                            f"{len(encontrados)} "
+                            f"ofertas"
                         )
+
 
                     ofertas.extend(
                         encontrados
                     )
 
+
                 except Exception as erro:
+
                     log(
-                        f"Erro {loja}: {erro}"
+                        f"Erro {loja}: "
+                        f"{erro}"
                     )
+
 
     return ofertas
 
@@ -976,103 +2028,182 @@ def buscar_todas_as_lojas():
 # DEDUPLICAÇÃO
 # ============================================================
 
-def chave_oferta(oferta):
+def chave_oferta(
+    oferta
+):
+
     return (
+
         normalizar_texto(
-            oferta.get("loja", "")
+            oferta.get(
+                "loja",
+                "",
+            )
         ),
+
         normalizar_texto(
-            oferta.get("modelo", "")
+            oferta.get(
+                "modelo",
+                "",
+            )
         ),
+
         round(
             float(
-                oferta.get("preco", 0)
+                oferta.get(
+                    "preco",
+                    0,
+                )
             ),
             2,
+        ),
+
+        normalizar_texto(
+            oferta.get(
+                "url",
+                "",
+            )
         ),
     )
 
 
-def deduplicar_ofertas(ofertas):
+def deduplicar_ofertas(
+    ofertas
+):
+
     resultado = []
+
     vistos = set()
 
+
     for oferta in ofertas:
-        chave = chave_oferta(oferta)
+
+        chave = chave_oferta(
+            oferta
+        )
+
 
         if chave in vistos:
             continue
 
-        vistos.add(chave)
-        resultado.append(oferta)
+
+        vistos.add(
+            chave
+        )
+
+        resultado.append(
+            oferta
+        )
+
 
     return resultado
 
 
 # ============================================================
-# REFERÊNCIA COMPARÁVEL
+# AGRUPAMENTO
 # ============================================================
 
-def agrupar_por_modelo(ofertas):
+def agrupar_por_modelo(
+    ofertas
+):
+
     grupos = {}
 
+
     for oferta in ofertas:
+
         modelo = oferta.get(
             "modelo"
         )
 
+
         if not modelo:
             continue
+
 
         chave = normalizar_texto(
             modelo
         )
 
+
         grupos.setdefault(
             chave,
             [],
-        ).append(oferta)
+        ).append(
+            oferta
+        )
+
 
     return grupos
 
 
-def calcular_referencia(grupo):
+# ============================================================
+# REFERÊNCIA
+# ============================================================
+
+def calcular_referencia(
+    grupo
+):
+
     precos = [
+
         float(
             item["preco"]
         )
+
         for item in grupo
-        if item.get("preco") is not None
-        and float(item["preco"]) > 0
+
+        if item.get(
+            "preco"
+        ) is not None
+
+        and float(
+            item["preco"]
+        ) > 0
     ]
+
 
     if len(precos) < 2:
         return None
+
 
     return statistics.median(
         precos
     )
 
 
-def encontrar_ofertas_desconto(ofertas):
+# ============================================================
+# OPORTUNIDADES
+# ============================================================
+
+def encontrar_ofertas_desconto(
+    ofertas
+):
+
     grupos = agrupar_por_modelo(
         ofertas
     )
 
     oportunidades = []
 
+
     for _, grupo in grupos.items():
+
         referencia = calcular_referencia(
             grupo
         )
 
+
         if referencia is None:
             continue
 
+
         for oferta in grupo:
+
             preco = float(
                 oferta["preco"]
             )
+
 
             desconto = (
                 1
@@ -1082,25 +2213,33 @@ def encontrar_ofertas_desconto(ofertas):
                 )
             )
 
+
             if (
                 desconto
                 >= DESCONTO_MINIMO
             ):
-                item = dict(oferta)
+
+                item = dict(
+                    oferta
+                )
+
 
                 item["referencia"] = round(
                     referencia,
                     2,
                 )
 
+
                 item["desconto"] = round(
                     desconto * 100,
                     1,
                 )
 
+
                 oportunidades.append(
                     item
                 )
+
 
     oportunidades.sort(
         key=lambda x: (
@@ -1109,6 +2248,7 @@ def encontrar_ofertas_desconto(ofertas):
         )
     )
 
+
     return oportunidades
 
 
@@ -1116,10 +2256,19 @@ def encontrar_ofertas_desconto(ofertas):
 # LINKS DE AFILIADO
 # ============================================================
 
-def link_amazon(oferta):
-    url = oferta.get("url")
+def link_amazon(
+    oferta
+):
+
+    url = limpar_url(
+        oferta.get(
+            "url"
+        )
+    )
+
 
     if not url:
+
         return url_amazon(
             oferta.get(
                 "titulo",
@@ -1127,50 +2276,251 @@ def link_amazon(oferta):
             )
         )
 
+
+    # Remove tag antiga
+    url = re.sub(
+        r"([?&])tag=[^&]+",
+        "",
+        url,
+        flags=re.I,
+    )
+
+
+    # Limpa ? ou & sobrando
+    url = url.rstrip(
+        "?&"
+    )
+
+
     separador = (
         "&"
         if "?" in url
         else "?"
     )
 
-    if "tag=" in url:
-        return url
 
     return (
         url
         + separador
         + "tag="
-        + quote(TAG_AMAZON)
+        + quote(
+            TAG_AMAZON
+        )
     )
 
 
-def link_mercado_livre(oferta):
-    return ML_AFILIADO
+def link_mercado_livre(
+    oferta
+):
+
+    url = limpar_url(
+        oferta.get(
+            "url"
+        )
+    )
 
 
-def link_shopee(oferta):
-    return SHOPEE_AFILIADO
+    return (
+        url
+        or ML_AFILIADO
+    )
+
+
+def link_shopee(
+    oferta
+):
+
+    url = limpar_url(
+        oferta.get(
+            "url"
+        )
+    )
+
+
+    return (
+        url
+        or SHOPEE_AFILIADO
+    )
 
 
 # ============================================================
-# TELEGRAM
+# BOTÕES
 # ============================================================
 
-def telegram_enviar(
+def montar_botoes(
+    oferta
+):
+
+    url_original = limpar_url(
+        oferta.get(
+            "url"
+        )
+    )
+
+
+    if not url_original:
+        return []
+
+
+    loja = oferta.get(
+        "loja",
+        "",
+    )
+
+
+    botoes = []
+
+
+    # --------------------------------------------------------
+    # BOTÃO PRINCIPAL
+    # --------------------------------------------------------
+
+    if loja == "Amazon":
+
+        botoes.append(
+            [
+                {
+                    "text":
+                    "🛒 COMPRAR OFERTA",
+                    "url":
+                    link_amazon(
+                        oferta
+                    ),
+                }
+            ]
+        )
+
+    else:
+
+        botoes.append(
+            [
+                {
+                    "text":
+                    "🛒 ABRIR OFERTA",
+                    "url":
+                    url_original,
+                }
+            ]
+        )
+
+
+    # --------------------------------------------------------
+    # AFILIADOS
+    # --------------------------------------------------------
+
+    if loja == "Mercado Livre":
+
+        botoes.append(
+            [
+                {
+                    "text":
+                    "🟡 Link afiliado ML",
+                    "url":
+                    ML_AFILIADO,
+                }
+            ]
+        )
+
+
+    elif loja == "Shopee":
+
+        botoes.append(
+            [
+                {
+                    "text":
+                    "🟠 Link afiliado Shopee",
+                    "url":
+                    SHOPEE_AFILIADO,
+                }
+            ]
+        )
+
+
+    return botoes
+
+
+# ============================================================
+# MENSAGEM
+# ============================================================
+
+def montar_mensagem(
+    oferta
+):
+
+    loja = oferta.get(
+        "loja",
+        "N/D",
+    )
+
+    modelo = oferta.get(
+        "modelo",
+        "Produto",
+    )
+
+    preco = oferta.get(
+        "preco"
+    )
+
+    referencia = oferta.get(
+        "referencia"
+    )
+
+    desconto = oferta.get(
+        "desconto",
+        0,
+    )
+
+
+    texto = (
+
+        "🔥 <b>OFERTA ENCONTRADA!</b>\n\n"
+
+        f"📱 <b>{modelo}</b>\n"
+
+        f"🏪 {loja}\n"
+
+        f"💰 <b>{moeda(preco)}</b>\n"
+
+        f"📊 Referência: "
+        f"{moeda(referencia)}\n"
+
+        f"📉 Desconto: "
+        f"<b>{desconto:.1f}%</b>\n\n"
+
+        "👇 <b>Produto encontrado "
+        "pelo Radar</b>"
+    )
+
+
+    return texto
+
+
+# ============================================================
+# TELEGRAM - ENVIO DE TEXTO
+# ============================================================
+
+def telegram_enviar_texto(
     texto,
     botoes=None,
 ):
+
     if not TELEGRAM_TOKEN:
+
         log(
             "TELEGRAM_TOKEN não configurado."
         )
+
         return False
 
+
     if not CHAT_ID:
+
         log(
             "CHAT_ID não configurado."
         )
+
         return False
+
 
     url = (
         "https://api.telegram.org/bot"
@@ -1178,73 +2528,309 @@ def telegram_enviar(
         + "/sendMessage"
     )
 
+
     dados = {
-        "chat_id": CHAT_ID,
-        "text": texto,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": False,
+
+        "chat_id":
+        CHAT_ID,
+
+        "text":
+        texto,
+
+        "parse_mode":
+        "HTML",
+
+        "disable_web_page_preview":
+        False,
     }
 
+
     if botoes:
-        dados["reply_markup"] = json.dumps(
+
+        dados[
+            "reply_markup"
+        ] = json.dumps(
             {
-                "inline_keyboard": botoes
+                "inline_keyboard":
+                botoes
             },
             ensure_ascii=False,
         )
 
+
     try:
+
         resposta = requests.post(
             url,
             data=dados,
             timeout=20,
         )
 
+
         if resposta.status_code != 200:
+
             log(
                 "Telegram HTTP "
                 f"{resposta.status_code}: "
                 f"{resposta.text[:500]}"
             )
+
             return False
+
 
         retorno = resposta.json()
 
-        if not retorno.get("ok"):
+
+        if not retorno.get(
+            "ok"
+        ):
+
             log(
-                f"Telegram erro: {retorno}"
+                f"Telegram erro: "
+                f"{retorno}"
             )
+
             return False
+
 
         return True
 
+
     except Exception as erro:
+
         log(
-            f"Erro Telegram: {erro}"
+            f"Erro Telegram: "
+            f"{erro}"
         )
+
         return False
+
+
+# ============================================================
+# TELEGRAM - FOTO + BOTÃO
+# ============================================================
+
+def telegram_enviar_foto(
+    foto,
+    legenda,
+    botoes=None,
+):
+
+    if not TELEGRAM_TOKEN:
+
+        log(
+            "TELEGRAM_TOKEN não configurado."
+        )
+
+        return False
+
+
+    if not CHAT_ID:
+
+        log(
+            "CHAT_ID não configurado."
+        )
+
+        return False
+
+
+    if not imagem_valida(
+        foto
+    ):
+
+        return False
+
+
+    url = (
+        "https://api.telegram.org/bot"
+        + TELEGRAM_TOKEN
+        + "/sendPhoto"
+    )
+
+
+    dados = {
+
+        "chat_id":
+        CHAT_ID,
+
+        "photo":
+        foto,
+
+        "caption":
+        legenda,
+
+        "parse_mode":
+        "HTML",
+
+        "disable_notification":
+        False,
+    }
+
+
+    if botoes:
+
+        dados[
+            "reply_markup"
+        ] = json.dumps(
+            {
+                "inline_keyboard":
+                botoes
+            },
+            ensure_ascii=False,
+        )
+
+
+    try:
+
+        resposta = requests.post(
+            url,
+            data=dados,
+            timeout=30,
+        )
+
+
+        if resposta.status_code != 200:
+
+            log(
+                "Telegram sendPhoto HTTP "
+                f"{resposta.status_code}: "
+                f"{resposta.text[:500]}"
+            )
+
+            return False
+
+
+        retorno = resposta.json()
+
+
+        if not retorno.get(
+            "ok"
+        ):
+
+            log(
+                "Telegram sendPhoto erro: "
+                f"{retorno}"
+            )
+
+            return False
+
+
+        return True
+
+
+    except Exception as erro:
+
+        log(
+            f"Erro Telegram foto: "
+            f"{erro}"
+        )
+
+        return False
+
+
+# ============================================================
+# TELEGRAM - ENVIO INTELIGENTE
+# ============================================================
+
+def telegram_enviar_oferta(
+    oferta
+):
+
+    mensagem = montar_mensagem(
+        oferta
+    )
+
+    botoes = montar_botoes(
+        oferta
+    )
+
+    imagem = limpar_url(
+        oferta.get(
+            "imagem"
+        )
+    )
+
+
+    # --------------------------------------------------------
+    # PRIMEIRO TENTA FOTO
+    # --------------------------------------------------------
+
+    if imagem:
+
+        sucesso = telegram_enviar_foto(
+            imagem,
+            mensagem,
+            botoes,
+        )
+
+
+        if sucesso:
+
+            log(
+                "Oferta enviada com FOTO: "
+                f"{oferta.get('modelo')} | "
+                f"{oferta.get('loja')}"
+            )
+
+            return True
+
+
+        log(
+            "Foto falhou. "
+            "Tentando mensagem normal."
+        )
+
+
+    # --------------------------------------------------------
+    # FALLBACK
+    # --------------------------------------------------------
+
+    sucesso = telegram_enviar_texto(
+        mensagem,
+        botoes,
+    )
+
+
+    if sucesso:
+
+        log(
+            "Oferta enviada sem foto: "
+            f"{oferta.get('modelo')} | "
+            f"{oferta.get('loja')}"
+        )
+
+
+    return sucesso
 
 
 # ============================================================
 # ANTI-SPAM
 # ============================================================
 
-def chave_alerta(oferta):
+def chave_alerta(
+    oferta
+):
+
     return (
+
         normalizar_texto(
             oferta.get(
                 "modelo",
                 "",
             )
         )
+
         + "|"
+
         + normalizar_texto(
             oferta.get(
                 "loja",
                 "",
             )
         )
+
         + "|"
+
         + str(
             round(
                 float(
@@ -1263,6 +2849,7 @@ def pode_enviar_alerta(
     oferta,
     alertas,
 ):
+
     chave = chave_alerta(
         oferta
     )
@@ -1271,254 +2858,368 @@ def pode_enviar_alerta(
         time.time()
     )
 
+
     ultimo = alertas.get(
         chave
     )
 
+
     if ultimo:
+
         if (
             agora
             - int(ultimo)
             < 12 * 60 * 60
         ):
+
             return False
 
+
     alertas[chave] = agora
+
 
     return True
 
 
 # ============================================================
-# MENSAGEM
+# LIMPEZA DOS ALERTAS ANTIGOS
 # ============================================================
 
-def montar_mensagem(oferta):
-    loja = oferta["loja"]
-    modelo = oferta["modelo"]
-    preco = oferta["preco"]
-    referencia = oferta["referencia"]
-    desconto = oferta["desconto"]
+def limpar_alertas_antigos(
+    alertas
+):
 
-    texto = (
-        "🔥 <b>OFERTA ENCONTRADA!</b>\n\n"
-        f"📱 <b>{modelo}</b>\n"
-        f"🏪 {loja}\n"
-        f"💰 <b>{moeda(preco)}</b>\n"
-        f"📊 Referência: {moeda(referencia)}\n"
-        f"📉 Desconto: <b>{desconto:.1f}%</b>\n\n"
-        "⚠️ Comparação feita com ofertas "
-        "do mesmo modelo/capacidade encontrados "
-        "pelo radar."
+    agora = int(
+        time.time()
     )
 
-    return texto
-
-
-def montar_botoes(oferta):
-    url_original = oferta.get(
-        "url"
+    limite = (
+        7 * 24 * 60 * 60
     )
 
-    if not url_original:
-        url_original = "#"
 
-    botoes = [
-        [
-            {
-                "text": "🛒 Ver oferta",
-                "url": url_original,
-            }
-        ]
-    ]
+    resultado = {}
 
-    loja = oferta.get(
-        "loja"
-    )
 
-    if loja == "Amazon":
-        botoes.append(
-            [
-                {
-                    "text": "🟠 Comprar com afiliado",
-                    "url": link_amazon(
-                        oferta
-                    ),
-                }
-            ]
-        )
+    for chave, timestamp in alertas.items():
 
-    elif loja == "Mercado Livre":
-        botoes.append(
-            [
-                {
-                    "text": "🟡 Link afiliado ML",
-                    "url": link_mercado_livre(
-                        oferta
-                    ),
-                }
-            ]
-        )
+        try:
 
-    elif loja == "Shopee":
-        botoes.append(
-            [
-                {
-                    "text": "🟠 Link afiliado Shopee",
-                    "url": link_shopee(
-                        oferta
-                    ),
-                }
-            ]
-        )
+            if (
+                agora
+                - int(timestamp)
+                <= limite
+            ):
 
-    return botoes
+                resultado[
+                    chave
+                ] = timestamp
+
+        except Exception:
+
+            continue
+
+
+    return resultado
 
 
 # ============================================================
-# CICLO DO RADAR
+# CICLO
 # ============================================================
 
 def executar_ciclo():
+
     inicio = time.time()
 
+
     with LOCK:
-        ULTIMO_CICLO["inicio"] = (
-            time.strftime(
-                "%Y-%m-%d %H:%M:%S"
+
+        ULTIMO_CICLO[
+            "inicio"
+        ] = time.strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+
+        ULTIMO_CICLO[
+            "erro"
+        ] = None
+
+        ULTIMO_CICLO[
+            "produtos"
+        ] = 0
+
+        ULTIMO_CICLO[
+            "ofertas"
+        ] = 0
+
+        ULTIMO_CICLO[
+            "alertas"
+        ] = 0
+
+
+    try:
+
+        log(
+            "=" * 60
+        )
+
+        log(
+            f"{APP_VERSION} - "
+            "INICIANDO CICLO"
+        )
+
+
+        # ----------------------------------------------------
+        # BUSCA
+        # ----------------------------------------------------
+
+        ofertas = (
+            buscar_todas_as_lojas()
+        )
+
+
+        log(
+            f"Busca bruta: "
+            f"{len(ofertas)} ofertas"
+        )
+
+
+        # ----------------------------------------------------
+        # DEDUPLICA
+        # ----------------------------------------------------
+
+        ofertas = (
+            deduplicar_ofertas(
+                ofertas
             )
         )
 
-        ULTIMO_CICLO["erro"] = None
-        ULTIMO_CICLO["produtos"] = 0
-        ULTIMO_CICLO["ofertas"] = 0
-        ULTIMO_CICLO["alertas"] = 0
-
-    try:
-        log("=" * 60)
 
         log(
-            f"{APP_VERSION} - INICIANDO CICLO"
+            f"Após deduplicação: "
+            f"{len(ofertas)} ofertas"
         )
 
-        ofertas = buscar_todas_as_lojas()
 
-        ofertas = deduplicar_ofertas(
-            ofertas
+        # ----------------------------------------------------
+        # OPORTUNIDADES
+        # ----------------------------------------------------
+
+        oportunidades = (
+            encontrar_ofertas_desconto(
+                ofertas
+            )
         )
 
-        oportunidades = encontrar_ofertas_desconto(
-            ofertas
+
+        log(
+            f"Oportunidades: "
+            f"{len(oportunidades)}"
         )
+
+
+        # ----------------------------------------------------
+        # HISTÓRICO
+        # ----------------------------------------------------
 
         historico = carregar_json(
             ARQUIVO_HISTORICO,
             [],
         )
 
+
         alertas = carregar_json(
             ARQUIVO_ALERTAS,
             {},
         )
 
+
+        if not isinstance(
+            historico,
+            list
+        ):
+
+            historico = []
+
+
+        if not isinstance(
+            alertas,
+            dict
+        ):
+
+            alertas = {}
+
+
+        # ----------------------------------------------------
+        # SALVA HISTÓRICO
+        # ----------------------------------------------------
+
         historico.extend(
+
             [
+
                 {
-                    "timestamp": item.get(
+                    "timestamp":
+                    item.get(
                         "timestamp"
                     ),
-                    "loja": item.get(
+
+                    "loja":
+                    item.get(
                         "loja"
                     ),
-                    "modelo": item.get(
+
+                    "modelo":
+                    item.get(
                         "modelo"
                     ),
-                    "preco": item.get(
+
+                    "preco":
+                    item.get(
                         "preco"
                     ),
-                    "url": item.get(
+
+                    "url":
+                    item.get(
                         "url"
                     ),
+
+                    "imagem":
+                    item.get(
+                        "imagem"
+                    ),
                 }
+
                 for item in ofertas
             ]
         )
 
-        if len(historico) > 10000:
-            historico = historico[
-                -10000:
-            ]
+
+        if len(
+            historico
+        ) > 10000:
+
+            historico = (
+                historico[-10000:]
+            )
+
 
         salvar_json(
             ARQUIVO_HISTORICO,
             historico,
         )
 
+
+        # ----------------------------------------------------
+        # LIMPA ALERTAS
+        # ----------------------------------------------------
+
+        alertas = (
+            limpar_alertas_antigos(
+                alertas
+            )
+        )
+
+
+        # ----------------------------------------------------
+        # ENVIA
+        # ----------------------------------------------------
+
         enviados = 0
 
+
         for oferta in oportunidades:
+
             if not pode_enviar_alerta(
                 oferta,
                 alertas,
             ):
                 continue
 
-            mensagem = montar_mensagem(
-                oferta
+
+            sucesso = (
+                telegram_enviar_oferta(
+                    oferta
+                )
             )
 
-            botoes = montar_botoes(
-                oferta
-            )
 
-            if telegram_enviar(
-                mensagem,
-                botoes,
-            ):
+            if sucesso:
+
                 enviados += 1
 
-            time.sleep(1)
+
+            time.sleep(
+                1
+            )
+
+
+        # ----------------------------------------------------
+        # SALVA ALERTAS
+        # ----------------------------------------------------
 
         salvar_json(
             ARQUIVO_ALERTAS,
             alertas,
         )
 
+
+        # ----------------------------------------------------
+        # FINAL
+        # ----------------------------------------------------
+
         fim = time.time()
 
+
+        modelos = set(
+
+            item["modelo"]
+
+            for item in ofertas
+
+            if item.get(
+                "modelo"
+            )
+        )
+
+
         with LOCK:
-            ULTIMO_CICLO["fim"] = (
-                time.strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
+
+            ULTIMO_CICLO[
+                "fim"
+            ] = time.strftime(
+                "%Y-%m-%d %H:%M:%S"
             )
 
-            ULTIMO_CICLO["produtos"] = (
-                len(
-                    set(
-                        item["modelo"]
-                        for item in ofertas
-                        if item.get("modelo")
-                    )
-                )
+            ULTIMO_CICLO[
+                "produtos"
+            ] = len(
+                modelos
             )
 
-            ULTIMO_CICLO["ofertas"] = (
-                len(ofertas)
+            ULTIMO_CICLO[
+                "ofertas"
+            ] = len(
+                ofertas
             )
 
-            ULTIMO_CICLO["alertas"] = (
-                enviados
-            )
+            ULTIMO_CICLO[
+                "alertas"
+            ] = enviados
+
 
         log(
             f"Ciclo finalizado em "
             f"{fim - inicio:.1f}s | "
             f"ofertas={len(ofertas)} | "
-            f"oportunidades={len(oportunidades)} | "
+            f"oportunidades="
+            f"{len(oportunidades)} | "
             f"alertas={enviados}"
         )
 
+
     except Exception as erro:
+
         log(
             "ERRO NO CICLO:"
         )
@@ -1527,8 +3228,12 @@ def executar_ciclo():
             traceback.format_exc()
         )
 
+
         with LOCK:
-            ULTIMO_CICLO["erro"] = str(
+
+            ULTIMO_CICLO[
+                "erro"
+            ] = str(
                 erro
             )
 
@@ -1538,23 +3243,32 @@ def executar_ciclo():
 # ============================================================
 
 def radar_loop():
+
     log(
-        f"{APP_VERSION} - thread do radar iniciada."
+        f"{APP_VERSION} - "
+        "thread do radar iniciada."
     )
 
+
     while True:
+
         try:
+
             executar_ciclo()
 
+
         except Exception:
+
             log(
                 traceback.format_exc()
             )
+
 
         log(
             f"Próximo ciclo em "
             f"{INTERVALO_CICLO}s."
         )
+
 
         time.sleep(
             INTERVALO_CICLO
@@ -1567,6 +3281,7 @@ def radar_loop():
 
 @app.route("/")
 def home():
+
     return (
         f"{APP_VERSION} ON"
     )
@@ -1574,32 +3289,59 @@ def home():
 
 @app.route("/health")
 def health():
+
     return {
-        "status": "ok",
-        "version": APP_VERSION,
+
+        "status":
+        "ok",
+
+        "version":
+        APP_VERSION,
     }
 
 
 @app.route("/status")
 def status():
+
     with LOCK:
+
         dados = dict(
             ULTIMO_CICLO
         )
 
+
     return {
-        "version": APP_VERSION,
-        "intervalo_segundos": (
-            INTERVALO_CICLO
-        ),
-        "desconto_minimo": (
-            DESCONTO_MINIMO
-        ),
-        "lojas": LOJAS,
-        "marcas": list(
+
+        "version":
+        APP_VERSION,
+
+        "intervalo_segundos":
+        INTERVALO_CICLO,
+
+        "desconto_minimo":
+        DESCONTO_MINIMO,
+
+        "lojas":
+        LOJAS,
+
+        "marcas":
+        list(
             MARCAS.keys()
         ),
-        "ultimo_ciclo": dados,
+
+        "telegram_configurado":
+        bool(
+            TELEGRAM_TOKEN
+            and CHAT_ID
+        ),
+
+        "afiliado_amazon":
+        bool(
+            TAG_AMAZON
+        ),
+
+        "ultimo_ciclo":
+        dados,
     }
 
 
@@ -1608,28 +3350,38 @@ def status():
 # ============================================================
 
 if __name__ == "__main__":
-    log("=" * 60)
+
+    log(
+        "=" * 60
+    )
+
 
     log(
         f"🚀 {APP_VERSION}"
     )
 
+
     log(
         "🚀 Servidor iniciando..."
     )
+
 
     log(
         f"🚀 PORT={PORT}"
     )
 
-    log(
-        f"🚀 Intervalo={INTERVALO_CICLO}s"
-    )
 
     log(
-        f"🚀 Desconto mínimo="
+        f"🚀 Intervalo="
+        f"{INTERVALO_CICLO}s"
+    )
+
+
+    log(
+        "🚀 Desconto mínimo="
         f"{DESCONTO_MINIMO * 100:.0f}%"
     )
+
 
     log(
         "🚀 Marcas: "
@@ -1638,12 +3390,14 @@ if __name__ == "__main__":
         )
     )
 
+
     log(
         "🚀 Lojas: "
         + ", ".join(
             LOJAS
         )
     )
+
 
     log(
         "🚀 Telegram configurado: "
@@ -1655,12 +3409,21 @@ if __name__ == "__main__":
         )
     )
 
+
+    log(
+        "🚀 Afiliado Amazon: "
+        + TAG_AMAZON
+    )
+
+
     thread = threading.Thread(
         target=radar_loop,
         daemon=True,
     )
 
+
     thread.start()
+
 
     app.run(
         host="0.0.0.0",
